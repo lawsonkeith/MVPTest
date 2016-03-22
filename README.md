@@ -20,3 +20,5 @@ Wire MVP as:
 | 4 | 0V |
 | 5 | 24V |
 | 6 | 24V |
+
+![](https://github.com/lawsonkeith/MVPTest/MVPComms/raw/master/DSC_0385.JPG)
