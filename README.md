@@ -21,4 +21,5 @@ Wire MVP as:
 | 5 | 24V |
 | 6 | 24V |
 
-![](https://github.com/lawsonkeith/MVPTest/MVPComms/raw/master/DSC_0385.JPG)
+
+![](https://github.com/lawsonkeith/MVPTest/blob/master/MVPComms/DSC_0385.JPG)
