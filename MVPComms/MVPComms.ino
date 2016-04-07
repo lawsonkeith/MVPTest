@@ -117,7 +117,7 @@ void loop() // run over and over
   int result;
    
   memset(&MVPComms,0,sizeof(MVPComms));
-  for(ch=0;ch<10;ch++)
+  for(ch=0;ch<15;ch++)
   {
     for(demand=-250;demand<250;demand+=499)
     {
