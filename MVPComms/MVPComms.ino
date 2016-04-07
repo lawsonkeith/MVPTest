@@ -107,7 +107,7 @@ void setup()
   Serial.println("Init...");
 
   // set the data rate for the SoftwareSerial port
-  SoftSerial.begin(38400);
+  SoftSerial.begin(19200);
 }
 
 void loop() // run over and over
@@ -117,7 +117,7 @@ void loop() // run over and over
   int result;
    
   memset(&MVPComms,0,sizeof(MVPComms));
-  for(ch=0;ch<16;ch++)
+  for(ch=0;ch<10;ch++)
   {
     for(demand=-250;demand<250;demand+=499)
     {
@@ -132,7 +132,7 @@ void loop() // run over and over
     Serial.print(ch);
   
   }
-  delay(5000);
+  delay(100);
 }
 
 
@@ -149,9 +149,10 @@ int UpdateMVP(struct TMVPComms *MVPComms)
   // === 1st processor TX                                                    ===
   //  =========================================================================
   memset(TxBuffer,0,sizeof(TxBuffer));
-  SoftSerial.setTimeout(50);
-  delay(5);
+  //SoftSerial.setTimeout(50);
+  
   digitalWrite(TXMODE, HIGH);
+  delay(5);
   
   TxBuffer[i++] = ADDRESS;
   TxBuffer[i++] = 4;
@@ -244,7 +245,7 @@ int UpdateMVP(struct TMVPComms *MVPComms)
     Serial.print(TxBuffer[i],HEX);
     Serial.print(",");
   }*/
-  
+  Serial.println("!");
   SoftSerial.write(TxBuffer, i); //waits till txd
   digitalWrite(TXMODE, LOW);
   
