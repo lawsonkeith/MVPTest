@@ -18,7 +18,7 @@ byte Tx[27] = {  1,4,0,0x15,0,  0x64,0,0x64,0,0x64  ,0,0,0,0,0x32,  0x32,0x32,0x
 
 struct TMVPComms {
   byte   MoistPwr;
-  byte SensorSupply[6];
+  byte SensorSupply[5];
   int SensorVal[10];
   
   int PCBVolts;
