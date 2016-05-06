@@ -14,7 +14,6 @@
 #include <SoftwareSerial.h>
 
 SoftwareSerial SoftSerial(10, 11); // RX, TX
-byte Tx[27] = {  1,4,0,0x15,0,  0x64,0,0x64,0,0x64  ,0,0,0,0,0x32,  0x32,0x32,0x32,0x32,0x04,  0x84,0xea,0x50,0,0x0f,  0xd5,0x60}; //see pp20
 
 struct TMVPComms {
   byte   MoistPwr;
@@ -111,6 +110,8 @@ void setup()
 
   // set the data rate for the SoftwareSerial port
   SoftSerial.begin(19200);
+  
+  delay(500);
 }
 
 void loop() // run over and over
@@ -118,6 +119,7 @@ void loop() // run over and over
   static int ch;
   static int demand;
   int result;
+   
    
   memset(&MVPComms,0,sizeof(MVPComms));
   for(ch=0;ch<15;ch++)
@@ -376,7 +378,7 @@ char CheckCRC(byte *Data,byte Len)
 //
 int ring(int i,int len)
 {
-  if(i>len)
+  if(i>=len)
     return i- len;
     
   if(i<0)
