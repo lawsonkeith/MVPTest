@@ -21,6 +21,9 @@ struct TMVPComms {
   byte SensorSupply[5];
   int SensorVal[10];
   
+  int MoistVal;
+  int TempVal;
+  
   int PCBVolts;
   int PCBTemp;
   
@@ -310,8 +313,8 @@ int UpdateMVP(struct TMVPComms *MVPComms)
       
     MVPComms->SensorVal[8] = RxBuffer[7] + (RxBuffer[6] << 8);
     MVPComms->SensorVal[9] = RxBuffer[9] + (RxBuffer[8] << 8);
-    MVPComms->SensorVal[10] = RxBuffer[11] + (RxBuffer[10] << 8);
-    MVPComms->SensorVal[11] = RxBuffer[13] + (RxBuffer[12] << 8);
+    MVPComms->MoistVal = RxBuffer[11] + (RxBuffer[10] << 8);
+    MVPComms->TempVal = RxBuffer[13] + (RxBuffer[12] << 8);
     MVPComms->PCBTemp = RxBuffer[15] + (RxBuffer[14] << 8);
     MVPComms->PCBVolts = RxBuffer[17] + (RxBuffer[16] << 8);   
   }
