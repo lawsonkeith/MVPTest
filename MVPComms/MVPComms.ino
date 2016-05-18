@@ -4,38 +4,62 @@
   Communicate to MVP @ 38K4 using soft serial
   Arduino monitor is @ 19K2 using Arduino UART
   
-  Address must be 1, 
-  Arduino  10  Tx
-  Arduino  11  Rx
-  Arduino  12  WE
+
   
   
  */
 #include <SoftwareSerial.h>
 
-SoftwareSerial SoftSerial(10, 11); // RX, TX
+
+SoftwareSerial SoftSerial(11, 10); // RX, TX
+#define SLOW 2
+#define FAST 1
+
+#define BUSY 1
+#define PASS 2
+#define FAIL 3
+#define WAIT 4
 
 struct TMVPComms {
-  byte   MoistPwr;
-  byte SensorSupply[5];
-  int SensorVal[10];
+
+  // DO
+  byte   SensorSupply[5];  // 1-5
+  byte   MoistPwr;         // 6
+
+  // AI
+  unsigned int SensorVal[10];       // 1-10
+  unsigned int MoistVal;            // 11
+  unsigned int TempVal;             // 12
+  unsigned int PCBVolts;            // 13
+  unsigned int PCBTemp;             // 14
   
-  int MoistVal;
-  int TempVal;
-  
-  int PCBVolts;
-  int PCBTemp;
-  
-  int Solenoid[15];
+  // AO
+  int Solenoid[15];        // 1-15 -A +B (30 outputs)
  
 } MVPComms;
-
+                          
+//GPIO addresses
 int TXMODE = 12; // controls MAX 485
+
+int LEDAG = 5;
+int LEDK  = 6;
+int LEDAR = 7;
+
+int BUTTON_IN = 8;
+int BUTTON_OUT = 9;
+
+int CURRENT_IN = 7;
+
 int ADDRESS = 1;
 
-// Table of CRC values for high-order byte
+// terminal
+#define TERM_X 4
+#define TERM_Y 20
+byte TermBuff[TERM_Y][TERM_X];
 
-static const unsigned char CRC_HiTable[] =
+// Table of CRC values for high-order byte
+//progmem breaks it??
+static const unsigned char CRC_HiTable[]  =
 {
 0x00, 0xC1, 0x81, 0x40, 0x01, 0xC0, 0x80, 0x41, 0x01, 0xC0,
 0x80, 0x41, 0x00, 0xC1, 0x81, 0x40, 0x01, 0xC0, 0x80, 0x41,
@@ -65,7 +89,7 @@ static const unsigned char CRC_HiTable[] =
 0x80, 0x41, 0x00, 0xC1, 0x81, 0x40
 };
 // Table of CRC values for low-order byte
-static const unsigned char CRC_LoTable[] =
+static const unsigned char CRC_LoTable[]  =
 {
 0x00, 0xC0, 0xC1, 0x01, 0xC3, 0x03, 0x02, 0xC2, 0xC6, 0x06,
 0x07, 0xC7, 0x05, 0xC5, 0xC4, 0x04, 0xCC, 0x0C, 0x0D, 0xCD,
@@ -99,9 +123,32 @@ static const unsigned char CRC_LoTable[] =
 
 void setup()
 {
+  byte i;
+  
+  pinMode(TXMODE, OUTPUT);
+  
+  // LED, set high to make come on
+  pinMode(LEDAG, OUTPUT);
+  pinMode(LEDAR,OUTPUT);
+  pinMode(LEDK,OUTPUT);
+  digitalWrite(LEDK,LOW);
+  
+  for(i=0;i<8;i++) {   
+    digitalWrite(LEDAR,LOW);
+    digitalWrite(LEDAG,HIGH);
+    delay(100);
+    digitalWrite(LEDAG,LOW);
+    digitalWrite(LEDAR,HIGH);
+    delay(100);
+  }
+ 
+
+  // Btn goes low when pressed
+  pinMode(BUTTON_OUT,OUTPUT);
+  pinMode(BUTTON_IN,INPUT_PULLUP);
+  digitalWrite(BUTTON_OUT,LOW);
  
   Serial.begin(19200);
-  pinMode(TXMODE, OUTPUT);
   while (!Serial) {
     ; // wait for serial port to connect. Needed for Leonardo only
   }
@@ -110,20 +157,103 @@ void setup()
 
   // set the data rate for the SoftwareSerial port
   SoftSerial.begin(19200);
-  
-  delay(500);
+ 
 }
 
+// Main application loop
+//
 void loop() // run over and over
 {
-  static int ch;
-  static int demand;
-  int result;
-   
-   
+  static int Current,aveCurrent;
+  static byte state,result=WAIT;
+  byte mode; 
+  static int count;
+  
+  // @@@@@ Clock routine at 200Hz @@@@@@@@
+  // all functs must return immediately!
+  delay(5);
+  
+  // @@@@ SM FOR AUTO TEST @@@@@@@@  
+  switch(state){
+    // get user input
+    case 0: mode = GetInput(); // can hang for 2s initially
+            state = mode; 
+            if(mode > 0) {
+               memset(TermBuff,0,sizeof(TermBuff));
+            }        
+            break;
+            
+    // execute test fast
+    case FAST: 
+            result = RunTest(FAST); 
+            if(result != BUSY) {
+               state == 0;
+            }         
+            break;
+            
+    //execute test slow
+    case SLOW:
+            result = RunTest(SLOW);
+            if(result != BUSY) {
+               state == 0;
+            }
+            break;
+  }
+  // @@@@ SM FOR AUTO TEST @@@@@@@@
+  
+  // Periodic terminal update.
+  // 
+  count++;
+  if(count==1000) {
+    UpdateTerminal(); // 5s
+    count = 0;
+  }
+   UpdateLED(result);
+
+  // Need to average the hell out of this
+  //
+  Current = (analogRead(CURRENT_IN) -512) * 37;
+  aveCurrent = Current * .01 + aveCurrent * .99;
+
+}// END loop
+
+
+
+
+// Write terminal from a buffer
+//
+void UpdateTerminal(void)
+{
+  byte line=0;
+  
+   // clear screen
+   Serial.write(27);       // ESC command
+  Serial.print("[2J");    // clear screen command
+  Serial.write(27);
+  Serial.print("[H");     // cursor to home command
+ 
+/*  for(line=0;line<TERM_Y;line++){
+    Serial.println(TermBuff[line][ 0 ]);
+  }*/
+}
+
+
+// run the test on the MFVP
+// ! return immediately
+byte RunTest(byte Speed)
+{
+  // main state machine variable
+  static int demand, state = 0;
+  byte result, ch;
+  
+  //clear incomming messgae area 
   memset(&MVPComms,0,sizeof(MVPComms));
+  
+  
   for(ch=0;ch<15;ch++)
   {
+//DEBUG
+    MVPComms.SensorSupply[0]=1;
     for(demand=-250;demand<250;demand+=499)
     {
       MVPComms.Solenoid[ch]=demand;
@@ -133,11 +263,63 @@ void loop() // run over and over
       result = UpdateMVP(&MVPComms);
     }
     //MVPComms.Solenoid[ch]=0;
-    Serial.println();
-    Serial.print(ch);
+    /*Serial.print("[");
+    Serial.print(MVPComms.SensorVal[0]);
+    Serial.print(",");
+     Serial.print(MVPComms.SensorVal[1]);
+    Serial.print(",");
+     Serial.print(MVPComms.SensorVal[2]);
+    Serial.print(",");
+     Serial.print(MVPComms.SensorVal[3]);
+    Serial.print(",");
+     Serial.print(MVPComms.SensorVal[4]);
+    Serial.print(",");
+    //Serial.print(ch);
+    Serial.println("]");*/
   
   }
-  delay(100);
+  //delay(100);*/
+}
+
+
+// Status LED, it's bicolour and has 3 states 
+//
+void UpdateLED(byte Result)
+{
+  if(Result == FAIL) {
+    digitalWrite(LEDAR,HIGH); // red
+    digitalWrite(LEDAG,LOW);
+  } else if (Result == PASS) {
+    digitalWrite(LEDAR,LOW); // gn
+    digitalWrite(LEDAG,HIGH);
+  } else {
+    digitalWrite(LEDAR,LOW); // clear
+    digitalWrite(LEDAG,LOW);
+  }
+}
+
+// We want to get user input here quick or long test
+//
+byte GetInput(void)
+{
+  byte x = 0;
+  
+  if(digitalRead(BUTTON_IN) == LOW) {
+    for(x=0;x<20;x++) {
+      if(digitalRead(BUTTON_IN))
+        break;
+      
+      delay(80);
+    }
+    
+    if(x==20) {
+      return SLOW;  //long
+    } else {
+      return FAST;  //short
+    } 
+  }
+  
+  return 0;
 }
 
 
@@ -277,14 +459,14 @@ int UpdateMVP(struct TMVPComms *MVPComms)
     if(RxBuffer[i++] != 0x10)
       return -3;
 
-    MVPComms->SensorVal[0] = RxBuffer[7] + (RxBuffer[6] << 8);
-    MVPComms->SensorVal[1] = RxBuffer[9] + (RxBuffer[8] << 8);
-    MVPComms->SensorVal[2] = RxBuffer[11] + (RxBuffer[10] << 8);
-    MVPComms->SensorVal[3] = RxBuffer[13] + (RxBuffer[12] << 8);
-    MVPComms->SensorVal[4] = RxBuffer[15] + (RxBuffer[14] << 8);
-    MVPComms->SensorVal[5] = RxBuffer[17] + (RxBuffer[16] << 8);
-    MVPComms->SensorVal[6] = RxBuffer[19] + (RxBuffer[18] << 8);
-    MVPComms->SensorVal[7] = RxBuffer[21] + (RxBuffer[20] << 8);
+    MVPComms->SensorVal[0] = RxBuffer[6] + (RxBuffer[5] << 8);
+    MVPComms->SensorVal[1] = RxBuffer[8] + (RxBuffer[7] << 8);
+    MVPComms->SensorVal[2] = RxBuffer[10] + (RxBuffer[9] << 8);
+    MVPComms->SensorVal[3] = RxBuffer[12] + (RxBuffer[11] << 8);
+    MVPComms->SensorVal[4] = RxBuffer[14] + (RxBuffer[13] << 8);  
+    MVPComms->SensorVal[5] = RxBuffer[16] + (RxBuffer[15] << 8);
+    MVPComms->SensorVal[6] = RxBuffer[18] + (RxBuffer[17] << 8);
+    MVPComms->SensorVal[7] = RxBuffer[20] + (RxBuffer[19] << 8);
   }
   else
     return -4;  
@@ -313,12 +495,12 @@ int UpdateMVP(struct TMVPComms *MVPComms)
     if(RxBuffer[i++] != 0x0c)
       return -7;
       
-    MVPComms->SensorVal[8] = RxBuffer[7] + (RxBuffer[6] << 8);
-    MVPComms->SensorVal[9] = RxBuffer[9] + (RxBuffer[8] << 8);
-    MVPComms->MoistVal = RxBuffer[11] + (RxBuffer[10] << 8);
-    MVPComms->TempVal = RxBuffer[13] + (RxBuffer[12] << 8);
-    MVPComms->PCBTemp = RxBuffer[15] + (RxBuffer[14] << 8);
-    MVPComms->PCBVolts = RxBuffer[17] + (RxBuffer[16] << 8);   
+    MVPComms->SensorVal[8] = RxBuffer[6] + (RxBuffer[5] << 8);
+    MVPComms->SensorVal[9] = RxBuffer[8] + (RxBuffer[7] << 8);
+    MVPComms->MoistVal = RxBuffer[10] + (RxBuffer[9] << 8);
+    MVPComms->TempVal = RxBuffer[12] + (RxBuffer[11] << 8);
+    MVPComms->PCBTemp = RxBuffer[14] + (RxBuffer[13] << 8);
+    MVPComms->PCBVolts = RxBuffer[16] + (RxBuffer[15] << 8);   
   }
   else
     return -8;  
@@ -375,7 +557,7 @@ char CheckCRC(byte *Data,byte Len)
 }
 
 // Wraparound functionm for LED scrolling
-//
+// Say 6 would go 0-5
 int ring(int i,int len)
 {
   if(i>=len)
@@ -384,4 +566,7 @@ int ring(int i,int len)
   if(i<0)
     return i+len;
 }
+
+
+  
 
