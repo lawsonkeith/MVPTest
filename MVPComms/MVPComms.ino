@@ -1,12 +1,11 @@
 /*
   MVP Test program.
-
   Communicate to MVP @ 38K4 using soft serial
   Arduino monitor is @ 19K2 using Arduino UART
   
-
-  
-  
+  A button allows for fast / slow test
+  And a LED shows status
+  Comms to the board is 
  */
 #include <SoftwareSerial.h>
 
@@ -50,12 +49,11 @@ int BUTTON_OUT = 9;
 
 int CURRENT_IN = 7;
 
-int ADDRESS = 1;
+int ADDRESS = 0;
 
 // terminal
-#define TERM_X 4
-#define TERM_Y 20
-byte TermBuff[TERM_Y][TERM_X];
+#define TERM_BUFF 512
+byte TermBuff[TERM_BUFF];
 
 // Table of CRC values for high-order byte
 //progmem breaks it??
@@ -160,6 +158,7 @@ void setup()
  
 }
 
+
 // Main application loop
 //
 void loop() // run over and over
@@ -181,11 +180,12 @@ void loop() // run over and over
             if(mode > 0) {
                memset(TermBuff,0,sizeof(TermBuff));
             }        
+            ResetMVPOut(&MVPComms); //zero all outputs
             break;
             
     // execute test fast
     case FAST: 
-            result = RunTest(FAST); 
+            result = RunTest(FAST,Current); 
             if(result != BUSY) {
                state == 0;
             }         
@@ -193,7 +193,7 @@ void loop() // run over and over
             
     //execute test slow
     case SLOW:
-            result = RunTest(SLOW);
+            result = RunTest(SLOW,Current);
             if(result != BUSY) {
                state == 0;
             }
@@ -213,7 +213,7 @@ void loop() // run over and over
   // Need to average the hell out of this
   //
   Current = (analogRead(CURRENT_IN) -512) * 37;
-  aveCurrent = Current * .01 + aveCurrent * .99;
+  //aveCurrent = Current * .01 + aveCurrent * .99;
 
 }// END loop
 
@@ -225,60 +225,288 @@ void loop() // run over and over
 void UpdateTerminal(void)
 {
   byte line=0;
+  byte *ttyPtr;
   
-   // clear screen
-   Serial.write(27);       // ESC command
+  // clear screen
+  Serial.write(27);       // ESC command
   Serial.print("[2J");    // clear screen command
   Serial.write(27);
   Serial.print("[H");     // cursor to home command
  
-/*  for(line=0;line<TERM_Y;line++){
-    Serial.println(TermBuff[line][ 0 ]);
-  }*/
+  ttyPtr = &TermBuff[0];
+  do{
+    Serial.println(ttyPtr);
+    ttyPtr+=strlen(ttyPtr)+1;
+  }while(strlen(ttyPtr)>0)
 }
 
 
 // run the test on the MFVP
-// ! return immediately
-byte RunTest(byte Speed)
+// ! return immediately with BUSY /  PASS / FAIL, the latter 2 stop this funct being called and conclude testing
+// In here we do a blocking comms poll, then check some test to see if it went ok
+// we return status and fill a char buffer which gets sent to the serial tty.
+// 
+byte RunTest(byte Speed,int Current)
 {
   // main state machine variable
-  static int demand, state = 0;
-  byte result, ch;
+  static byte state = 0,channel=0; //state machine vars
+  static char retval,tty_line;      // return val &tty line #
+  int aveCurrent,aveSensor;
+  byte result;
+  const int mA_HI = 500; // 0-1023 raw val
+  const int mA_LO = 480;
+  const int V_HI = 600;
+  const int V_LO = 500;
+  const int SEN_OFF = 10;
+  const int SOL_HI = 1000; // mA
+  const int SOL_LO = 900; // mA
+  const int SOL_OFF = 20;
+  const int SOL_DRIVE = 50; // 0-255
+  static char ttyPtr; //write ptr to tty buffer, pack all the strings together in an array for efficiency as Mr Atmel has go no memory.
+  static int SAMPLES,,statecnt=0;
   
-  //clear incomming messgae area 
-  memset(&MVPComms,0,sizeof(MVPComms));
+  // clear incomming messgae area 
+  //memset(&MVPComms,0,sizeof(MVPComms));
+  result = UpdateMVP(&MVPComms);
+  ResetMVPOut(&MVPComms); //zero all outputs
   
+  FAST
   
-  for(ch=0;ch<15;ch++)
+  // ok got comms now.
+  switch(state)
   {
-//DEBUG
-    MVPComms.SensorSupply[0]=1;
-    for(demand=-250;demand<250;demand+=499)
-    {
-      MVPComms.Solenoid[ch]=demand;
-      MVPComms.Solenoid[ ring(ch-1,15) ]=demand;
-      MVPComms.Solenoid[ ring(ch-2,15) ]=demand;
-      MVPComms.Solenoid[ ring(ch-3,15) ]=0;
-      result = UpdateMVP(&MVPComms);
-    }
-    //MVPComms.Solenoid[ch]=0;
-    /*Serial.print("[");
-    Serial.print(MVPComms.SensorVal[0]);
-    Serial.print(",");
-     Serial.print(MVPComms.SensorVal[1]);
-    Serial.print(",");
-     Serial.print(MVPComms.SensorVal[2]);
-    Serial.print(",");
-     Serial.print(MVPComms.SensorVal[3]);
-    Serial.print(",");
-     Serial.print(MVPComms.SensorVal[4]);
-    Serial.print(",");
-    //Serial.print(ch);
-    Serial.println("]");*/
-  
+    case 0: // init 
+            retval = BUSY;
+            statecnt=0;
+            channel=0;
+            state++;
+            ADDRESS=1;
+            tty_line=0;
+            ttyPtr = &TermBuff[0];
+            if(speed == SLOW)
+              SAMPLES = 100;
+            else  
+              SAMPLES = 2000;
+              
+            break;
+     
+     case 1: // board addr scan
+            statecnt++;
+            // @ check...
+            if(statecnt==SAMPLES){
+              statecnt=0;
+              ADDRESS++;
+            }
+            // -->> bad
+            if(ADDRESS==17){
+                // Error, failed on comms
+                sprintf(ttyPtr,"Test %d Cant find card");
+                ttyPtr+=strlen(ttyPtr)+1;
+                state = 0;
+                retval = FAIL;
+            }
+            // -->> ok
+            if(result==1) {
+              sprintf(ttyPtr , "Test %d Found card on address %d\n",state, ADDRESS);
+              ttyPtr+=strlen(ttyPtr)+1;
+              sprintf(ttyPtr , "Test %d testing solenoid drives: ",state+1);
+              ttyPtr+=strlen(ttyPtr)+1;
+              state++;
+              channel = 0;
+              statecnt = 0;
+              GetAveCurrent(0,0);
+            }
+            break;
+            
+    case 2: // scan all proportional outputs (positive) ...
+            // 
+            // @ check...
+            aveCurrent = GetAveCurrent(SAMPLES,Current); // # samples
+            MVPComms.Solenoid[channel] = SOL_DRIVE;
+            
+            if(statecnt==SAMPLES){
+              statecnt=0;
+              channel++;
+              GetAveCurrent(0); // reset
+              
+              // -->> test results
+              if((aveCurrent < SOL_HI) && (aveCurrent > SOL_LO)){
+                // ok, current is good
+                sprintf(ttyPtr,"%d,",channel);  
+                ttyPtr+=strlen(ttyPtr)+1;
+              } else {
+                // fail
+                sprintf(ttyPtr,"%d FAIL\n",channel);
+                ttyPtr+=strlen(ttyPtr)+1;
+                sprintf(ttyPtr,"Proportional drive failed, ave current should be %d to %d.  Was %d (mA)",SOL_LO,SOL_HI,aveCurrent);
+                ttyPtr+=strlen(ttyPtr)+1;
+                // Error, failed on comms
+                state = 0;
+                retval = FAIL;
+              }
+            }
+            
+            // -->> done
+            if(channel==15) {
+              sprintf(ttyPtr,"\nTest %d testing sensor pwr & feedbacks: ",state+1);
+              ttyPtr+=strlen(ttyPtr)+1;
+              state++;
+              channel = 0;
+              statecnt = 0;
+              GetAveSensor(0,0);
+            }
+            break;
+          
+    case 3: // scan all proportional outputs (null) ...
+            // 
+            // @ check...
+            aveCurrent = GetAveCurrent(SAMPLES,Current); // # samples
+            
+            if(statecnt==SAMPLES){
+              statecnt=0;
+              channel++;
+              GetAveCurrent(0,0); // reset
+              
+              // -->> test results
+              if(aveCurrent < SOL_OFF){
+                // ok, current is good
+                sprintf(ttyPtr,"%d,",channel);  
+                ttyPtr+=strlen(ttyPtr)+1;
+              } else {
+                // fail
+                sprintf(ttyPtr,"%d FAIL\n",channel);
+                ttyPtr+=strlen(ttyPtr)+1;
+                sprintf(ttyPtr,"Proportional drive failed, ave current should be below %d.  Was %d (mA)",SOL_OFF,aveCurrent);
+                ttyPtr+=strlen(ttyPtr)+1;
+                // Error, failed on comms
+                state = 0;
+                retval = FAIL;
+              }
+            }
+            
+            // -->> done
+            if(channel==15) {
+              sprintf(ttyPtr,"\nTest %d testing sensor pwr & feedbacks: ",state+1);
+              ttyPtr+=strlen(ttyPtr)+1;
+              state++;
+              channel = 0;
+              statecnt = 0;
+              GetAveSensor(0,0);
+            }
+            break;
+            
+    case 4: // scan all sensor inputs for (positive)...
+            // 
+            // @ check...
+            aveSensor = GetAveSensor(SAMPLES,channel/2); // # samples
+            SensorSupply[channel/2]=1; //turn on PSU 1 per 2 sensors...
+            
+            if(statecnt==SAMPLES){
+              statecnt=0;
+              channel++;
+              GetAveSensor(0,0); // reset
+              
+              // -->> test results
+              if( ((aveSensor < mA_HI) && (aveCurrent > mA_LO)) || ((aveSensor < V_HI) && (aveCurrent > V_LO))){
+                // ok, current is good
+                sprintf(ttyPtr,"%d,",channel);  
+                ttyPtr+=strlen(ttyPtr)+1;
+              } else {
+                // fail
+                sprintf(ttyPtr,"%d FAIL\n",channel);
+                ttyPtr+=strlen(ttyPtr)+1;
+                sprintf(ttyPtr,"Sensor failed out of range value, average was %d (Raw)",SOL_LO,SOL_HI,aveCurrent);
+                ttyPtr+=strlen(ttyPtr)+1;
+                // Error, failed on comms
+                state = 0;
+                retval = FAIL;
+              }
+            }
+            
+            // -->> done
+            if(channel==10) {
+              sprintf(ttyPtr,"\nTest %d testing sensor pwr & feedback zero points",state+1);
+              ttyPtr+=strlen(ttyPtr)+1;
+              state++;
+              channel = 0;
+              statecnt = 0;
+              GetAveSensor(0,0); // reset
+            }
+            break;
+            
+    case 5: // scan all sensor inputs (null) values...
+            // 
+            // @ check...
+            aveSensor = GetAveSensor(SAMPLES,channel/2); // # sample
+            
+            if(statecnt==SAMPLES){
+              statecnt=0;
+              channel++;
+              GetAveSensor(0,0); // reset
+              
+              // -->> test results
+              if(aveSensor < SEN_OFF) {
+                // ok, 
+                sprintf(ttyPtr,"%d,",channel);  
+                ttyPtr+=strlen(ttyPtr)+1;
+              } else {
+                // fail
+                sprintf(ttyPtr,"%d FAIL\n",channel);
+                ttyPtr+=strlen(ttyPtr)+1;
+                sprintf(ttyPtr,"Sensor failed over range value, average was %d (Raw) should be zero",aveCurrent);
+                ttyPtr+=strlen(ttyPtr)+1;
+                // Error, failed on comms
+                state = 0;
+                retval = FAIL;
+              }
+            }
+            
+            // -->> done
+            if(channel==1) {
+              sprintf(ttyPtr,"\nFinished",state+1);
+              ttyPtr+=strlen(ttyPtr)+1;
+              state=0;
+              channel = 0;
+              statecnt = 0;
+              GetAveSensor(0,0); // reset
+              retval = PASS;
+            }
+            break;
   }
-  //delay(100);*/
+  
+  return retval;
+}
+
+
+// calc average current
+//
+int GetAveCurrent(byte samples,int Current)
+{
+  static float ave;
+   
+  if(samples > 0) {
+    samples *= .3; // exponent compensation
+    ave = (float)(samples-1) / (float)samples * ave  + (float)Current/(float)samples ;
+  }
+  else
+    ave = 0; //reset
+}
+
+// calc average sensor value
+//
+int GetAveSensor(byte samples,byte channel)
+{
+  static float ave;
+
+  if((channel < 0) || (channel > 9)
+    return -1;
+    
+   if(samples > 0) {
+    samples *= .3; // exponent compensation
+    ave = (float)(samples-1) / (float)samples * ave  + (float)MVPComms.Sensor[channel]/(float)samples ;
+  }
+  else
+    ave = 0; //reset
 }
 
 
@@ -321,6 +549,21 @@ byte GetInput(void)
   
   return 0;
 }
+
+
+// Turn off all mvp outputs
+//
+void ResetMVPOut(&MVPComms)
+{
+  byte i;
+  
+  for(i=0;i<14;i++)
+    MVPComms->Solenoid[i] = 0;
+    
+  for(i=0;i<4;i++)
+    SensorSupply[i] = 0;
+}
+
 
 
 // Update the MVP, send commands an process the reply.
@@ -568,5 +811,48 @@ int ring(int i,int len)
 }
 
 
-  
 
+
+
+// run the test on the MFVP
+// ! return immediately
+byte RunTest_old(byte Speed)
+{
+  // main state machine variable
+  static int demand, state = 0;
+  byte result, ch;
+  
+  //clear incomming messgae area 
+  memset(&MVPComms,0,sizeof(MVPComms));
+  
+  
+  for(ch=0;ch<15;ch++)
+  {
+//DEBUG
+    MVPComms.SensorSupply[0]=1;
+    for(demand=-250;demand<250;demand+=499)
+    {
+      MVPComms.Solenoid[ch]=demand;
+      MVPComms.Solenoid[ ring(ch-1,15) ]=demand;
+      MVPComms.Solenoid[ ring(ch-2,15) ]=demand;
+      MVPComms.Solenoid[ ring(ch-3,15) ]=0;
+      result = UpdateMVP(&MVPComms);
+    }
+    //MVPComms.Solenoid[ch]=0;
+    /*Serial.print("[");
+    Serial.print(MVPComms.SensorVal[0]);
+    Serial.print(",");
+     Serial.print(MVPComms.SensorVal[1]);
+    Serial.print(",");
+     Serial.print(MVPComms.SensorVal[2]);
+    Serial.print(",");
+     Serial.print(MVPComms.SensorVal[3]);
+    Serial.print(",");
+     Serial.print(MVPComms.SensorVal[4]);
+    Serial.print(",");
+    //Serial.print(ch);
+    Serial.println("]");*/
+  
+  }
+  //delay(100);*/
+}
