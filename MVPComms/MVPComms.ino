@@ -1,11 +1,18 @@
 /*
-  MVP Test program.
-  Communicate to MVP @ 38K4 using soft serial
+  Module: MVP Test program.
+
+  Author: K Lawson
+  Target: Arduino Nano ATmega328
+  
+  Description:
+  Communicate to MVP @ 19K2 using soft serial
   Arduino monitor is @ 19K2 using Arduino UART
   
-  A button allows for fast / slow test
-  And a LED shows status
-  Comms to the board is 
+  * A button allows for fast / slow test
+  * And a LED shows status
+  * Comms to the board is over 485 using (soft ser)
+  * A terminal displays test status info (default ser)
+  
  */
 #include <SoftwareSerial.h>
 
@@ -19,6 +26,8 @@ SoftwareSerial SoftSerial(11, 10); // RX, TX
 #define FAIL 3
 #define WAIT 4
 
+
+  
 struct TMVPComms {
 
   // DO
@@ -36,6 +45,22 @@ struct TMVPComms {
   int Solenoid[15];        // 1-15 -A +B (30 outputs)
  
 } MVPComms;
+
+// A structure to hold test results
+struct TMVPResults {
+  bool   AddressFound; 
+  bool   TestComplete;
+  byte   TestNum;
+  bool   SensorDrive[10];  // 1-5
+  bool   SensorNull[10];
+  bool   Moist;         // 6
+  bool   Temp;
+  bool   PCBVolts;         // 6
+  bool   PCBTemp;
+  bool   PropDrive[15];
+  bool   PropNull[15];
+
+} MVPResults;
                           
 //GPIO addresses
 int TXMODE = 12; // controls MAX 485
@@ -49,11 +74,10 @@ int BUTTON_OUT = 9;
 
 int CURRENT_IN = 7;
 
+// address#
 int ADDRESS = 0;
 
 // terminal
-#define TERM_BUFF 512
-byte TermBuff[TERM_BUFF];
 
 // Table of CRC values for high-order byte
 //progmem breaks it??
@@ -118,7 +142,8 @@ static const unsigned char CRC_LoTable[]  =
 };
 
 
-
+// setup GPIO
+//
 void setup()
 {
   byte i;
@@ -153,7 +178,7 @@ void setup()
 
   Serial.println("Init...");
 
-  // set the data rate for the SoftwareSerial port
+  // set the data rate for the SoftwareSerial port (MFVP)
   SoftSerial.begin(19200);
  
 }
@@ -178,7 +203,9 @@ void loop() // run over and over
     case 0: mode = GetInput(); // can hang for 2s initially
             state = mode; 
             if(mode > 0) {
-               memset(TermBuff,0,sizeof(TermBuff));
+              ResetResults();
+//               memset(TermBuff,0,sizeof(TermBuff));
+//               memset((char *) MVPResults,0,sizeof((char *)MVPResults));          
             }        
             ResetMVPOut(&MVPComms); //zero all outputs
             break;
@@ -219,25 +246,143 @@ void loop() // run over and over
 
 
 
+// set results to void state
+//
+void ResetResults()
+{
+  byte i;
+
+  MVPResults.AddressFound = false; 
+  MVPResults.TestNum = 0;
+  MVPResults.TestComplete = false; 
+  
+  for(i=0;i<10;i++) {
+    MVPResults.SensorDrive[i];  
+    MVPResults.SensorNull[i];
+  }
+  
+  MVPResults.Moist = false;       
+  MVPResults.Temp = false;        
+  MVPResults.PCBVolts = false;   
+  MVPResults.PCBTemp = false;   
+  
+  for(i=0;i<10;i++) {
+    MVPResults.PropDrive[i];
+    MVPResults.PropNull[i];
+  }
+} 
+
 
 // Write terminal from a buffer
 //
 void UpdateTerminal(void)
 {
-  byte line=0;
-  byte *ttyPtr;
+  byte tests,i;
   
   // clear screen
   Serial.write(27);       // ESC command
   Serial.print("[2J");    // clear screen command
   Serial.write(27);
   Serial.print("[H");     // cursor to home command
+
+  Serial.println(F("======== MFVP Board tester (Hi-res only) ========"));
+  Serial.println("");
+
+  tests = MVPResults.TestNum;
+  if(tests == 0) {
+     Serial.println(F("Waiting for user input..."));
+  }else
+  {
+    // #1
+    if(MVPResults.AddressFound){
+      Serial.print(F("Test 1: Found board address at address "));
+      Serial.println(ADDRESS);
+    }else{
+      Serial.println(F("ERROR: - Can't communicate to board"));
+    }
+    if((tests--) == 0) return;
+
+    // #2
+    Serial.print(F("Test 2: Proportionals on: "));
+    for(i=0;i<14;i++){
+      Serial.print(i+1);
+      if(MVPResults.PropDrive[i])
+        Serial.print(":ok ");
+      else
+        Serial.print(":Fail ");
+    }
+    if((tests--) == 0) return;
  
-  ttyPtr = &TermBuff[0];
-  do{
-    Serial.println(ttyPtr);
-    ttyPtr+=strlen(ttyPtr)+1;
-  }while(strlen(ttyPtr)>0)
+    // #3
+    Serial.print(F("Test 3: Proportionals off: "));
+    for(i=0;i<14;i++){
+      Serial.print(i+1);
+      if(MVPResults.PropNull[i])
+        Serial.print(":ok ");
+      else
+        Serial.print(":Fail ");
+    }
+    if((tests--) == 0) return;
+
+    // #4
+    Serial.print(F("Test 4: Sensors on: "));
+    for(i=0;i<9;i++){
+      Serial.print(i+1);
+      if(MVPResults.SensorDrive[i])
+        Serial.print(":ok ");
+      else
+        Serial.print(":Fail ");
+    }
+    if((tests--) == 0) return;
+
+    // #5
+    Serial.print(F("Test 5: Sensors off: "));
+    for(i=0;i<9;i++){
+      Serial.print(i+1);
+      if(MVPResults.SensorNull[i])
+        Serial.print(":ok ");
+      else
+        Serial.print(":Fail ");
+    }
+    if((tests--) == 0) return;
+
+    // #6
+    Serial.print(F("Test 6: Moisture "));
+      if(MVPResults.Moist)
+        Serial.print(":ok ");
+      else
+        Serial.print(":Fail ");
+    if((tests--) == 0) return; 
+  
+    // #7
+    Serial.print(F("Test 7: Temp "));
+      if(MVPResults.Temp)
+        Serial.print(":ok ");
+      else
+        Serial.print(":Fail ");
+    if((tests--) == 0) return;
+
+    // #8
+    Serial.print(F("Test 8: PCBVolts "));
+      if(MVPResults.PCBVolts)
+        Serial.print(":ok ");
+      else
+        Serial.print(":Fail ");  
+    if((tests--) == 0) return;
+    
+     // #9
+    Serial.print(F("Test 9: PCBTemp "));
+      if(MVPResults.PCBTemp)
+        Serial.print(":ok ");
+      else
+        Serial.print(":Fail ");  
+    if((tests--) == 0) return;
+
+    if(MVPResults.TestComplete){
+      Serial.println("");
+      Serial.println(F("Test complete."));
+    }
+  }
 }
 
 
@@ -250,9 +395,11 @@ byte RunTest(byte Speed,int Current)
 {
   // main state machine variable
   static byte state = 0,channel=0; //state machine vars
-  static char retval,tty_line;      // return val &tty line #
+  static char retval;      // return val 
   int aveCurrent,aveSensor;
   byte result;
+  static int SAMPLES,statecnt=0;
+
   const int mA_HI = 500; // 0-1023 raw val
   const int mA_LO = 480;
   const int V_HI = 600;
@@ -262,15 +409,11 @@ byte RunTest(byte Speed,int Current)
   const int SOL_LO = 900; // mA
   const int SOL_OFF = 20;
   const int SOL_DRIVE = 50; // 0-255
-  static char ttyPtr; //write ptr to tty buffer, pack all the strings together in an array for efficiency as Mr Atmel has go no memory.
-  static int SAMPLES,,statecnt=0;
-  
+
   // clear incomming messgae area 
-  //memset(&MVPComms,0,sizeof(MVPComms));
   result = UpdateMVP(&MVPComms);
   ResetMVPOut(&MVPComms); //zero all outputs
-  
-  FAST
+ 
   
   // ok got comms now.
   switch(state)
@@ -281,9 +424,7 @@ byte RunTest(byte Speed,int Current)
             channel=0;
             state++;
             ADDRESS=1;
-            tty_line=0;
-            ttyPtr = &TermBuff[0];
-            if(speed == SLOW)
+            if(Speed == SLOW)
               SAMPLES = 100;
             else  
               SAMPLES = 2000;
@@ -299,18 +440,14 @@ byte RunTest(byte Speed,int Current)
             }
             // -->> bad
             if(ADDRESS==17){
-                // Error, failed on comms
-                sprintf(ttyPtr,"Test %d Cant find card");
-                ttyPtr+=strlen(ttyPtr)+1;
+
                 state = 0;
                 retval = FAIL;
             }
             // -->> ok
             if(result==1) {
-              sprintf(ttyPtr , "Test %d Found card on address %d\n",state, ADDRESS);
-              ttyPtr+=strlen(ttyPtr)+1;
-              sprintf(ttyPtr , "Test %d testing solenoid drives: ",state+1);
-              ttyPtr+=strlen(ttyPtr)+1;
+              MVPResults.AddressFound = true; 
+              MVPResults.TestNum++;
               state++;
               channel = 0;
               statecnt = 0;
@@ -327,19 +464,15 @@ byte RunTest(byte Speed,int Current)
             if(statecnt==SAMPLES){
               statecnt=0;
               channel++;
-              GetAveCurrent(0); // reset
+              GetAveCurrent(0,0); // reset
               
               // -->> test results
               if((aveCurrent < SOL_HI) && (aveCurrent > SOL_LO)){
                 // ok, current is good
-                sprintf(ttyPtr,"%d,",channel);  
-                ttyPtr+=strlen(ttyPtr)+1;
+                MVPResults.PropDrive[channel] = true;                          
               } else {
                 // fail
-                sprintf(ttyPtr,"%d FAIL\n",channel);
-                ttyPtr+=strlen(ttyPtr)+1;
-                sprintf(ttyPtr,"Proportional drive failed, ave current should be %d to %d.  Was %d (mA)",SOL_LO,SOL_HI,aveCurrent);
-                ttyPtr+=strlen(ttyPtr)+1;
+                MVPResults.PropDrive[channel] = false;
                 // Error, failed on comms
                 state = 0;
                 retval = FAIL;
@@ -348,8 +481,7 @@ byte RunTest(byte Speed,int Current)
             
             // -->> done
             if(channel==15) {
-              sprintf(ttyPtr,"\nTest %d testing sensor pwr & feedbacks: ",state+1);
-              ttyPtr+=strlen(ttyPtr)+1;
+              MVPResults.TestNum++;
               state++;
               channel = 0;
               statecnt = 0;
@@ -370,14 +502,10 @@ byte RunTest(byte Speed,int Current)
               // -->> test results
               if(aveCurrent < SOL_OFF){
                 // ok, current is good
-                sprintf(ttyPtr,"%d,",channel);  
-                ttyPtr+=strlen(ttyPtr)+1;
+                MVPResults.PropNull[channel] = true;
               } else {
                 // fail
-                sprintf(ttyPtr,"%d FAIL\n",channel);
-                ttyPtr+=strlen(ttyPtr)+1;
-                sprintf(ttyPtr,"Proportional drive failed, ave current should be below %d.  Was %d (mA)",SOL_OFF,aveCurrent);
-                ttyPtr+=strlen(ttyPtr)+1;
+                MVPResults.PropNull[channel] = false;
                 // Error, failed on comms
                 state = 0;
                 retval = FAIL;
@@ -386,8 +514,7 @@ byte RunTest(byte Speed,int Current)
             
             // -->> done
             if(channel==15) {
-              sprintf(ttyPtr,"\nTest %d testing sensor pwr & feedbacks: ",state+1);
-              ttyPtr+=strlen(ttyPtr)+1;
+              MVPResults.TestNum++;
               state++;
               channel = 0;
               statecnt = 0;
@@ -399,7 +526,7 @@ byte RunTest(byte Speed,int Current)
             // 
             // @ check...
             aveSensor = GetAveSensor(SAMPLES,channel/2); // # samples
-            SensorSupply[channel/2]=1; //turn on PSU 1 per 2 sensors...
+            MVPComms.SensorSupply[channel/2]=1; //turn on PSU 1 per 2 sensors...
             
             if(statecnt==SAMPLES){
               statecnt=0;
@@ -409,14 +536,10 @@ byte RunTest(byte Speed,int Current)
               // -->> test results
               if( ((aveSensor < mA_HI) && (aveCurrent > mA_LO)) || ((aveSensor < V_HI) && (aveCurrent > V_LO))){
                 // ok, current is good
-                sprintf(ttyPtr,"%d,",channel);  
-                ttyPtr+=strlen(ttyPtr)+1;
+                MVPResults.SensorDrive[channel] = true;
               } else {
                 // fail
-                sprintf(ttyPtr,"%d FAIL\n",channel);
-                ttyPtr+=strlen(ttyPtr)+1;
-                sprintf(ttyPtr,"Sensor failed out of range value, average was %d (Raw)",SOL_LO,SOL_HI,aveCurrent);
-                ttyPtr+=strlen(ttyPtr)+1;
+                MVPResults.SensorDrive[channel] = false;
                 // Error, failed on comms
                 state = 0;
                 retval = FAIL;
@@ -425,8 +548,7 @@ byte RunTest(byte Speed,int Current)
             
             // -->> done
             if(channel==10) {
-              sprintf(ttyPtr,"\nTest %d testing sensor pwr & feedback zero points",state+1);
-              ttyPtr+=strlen(ttyPtr)+1;
+              MVPResults.TestNum++;
               state++;
               channel = 0;
               statecnt = 0;
@@ -447,14 +569,10 @@ byte RunTest(byte Speed,int Current)
               // -->> test results
               if(aveSensor < SEN_OFF) {
                 // ok, 
-                sprintf(ttyPtr,"%d,",channel);  
-                ttyPtr+=strlen(ttyPtr)+1;
+                MVPResults.SensorNull[channel] = true;
               } else {
                 // fail
-                sprintf(ttyPtr,"%d FAIL\n",channel);
-                ttyPtr+=strlen(ttyPtr)+1;
-                sprintf(ttyPtr,"Sensor failed over range value, average was %d (Raw) should be zero",aveCurrent);
-                ttyPtr+=strlen(ttyPtr)+1;
+                MVPResults.SensorNull[channel] = false;
                 // Error, failed on comms
                 state = 0;
                 retval = FAIL;
@@ -463,13 +581,13 @@ byte RunTest(byte Speed,int Current)
             
             // -->> done
             if(channel==1) {
-              sprintf(ttyPtr,"\nFinished",state+1);
-              ttyPtr+=strlen(ttyPtr)+1;
+              MVPResults.TestNum++;
               state=0;
               channel = 0;
               statecnt = 0;
               GetAveSensor(0,0); // reset
               retval = PASS;
+              MVPResults.TestComplete = true;
             }
             break;
   }
@@ -478,7 +596,7 @@ byte RunTest(byte Speed,int Current)
 }
 
 
-// calc average current
+// calc average current, also has a reset function
 //
 int GetAveCurrent(byte samples,int Current)
 {
@@ -492,21 +610,24 @@ int GetAveCurrent(byte samples,int Current)
     ave = 0; //reset
 }
 
-// calc average sensor value
+// calc average sensor value, also has a reset function
 //
 int GetAveSensor(byte samples,byte channel)
 {
-  static float ave;
-
-  if((channel < 0) || (channel > 9)
+  static float ave[10];
+  byte i;
+  
+  if((channel < 0) || (channel > 9))
     return -1;
     
    if(samples > 0) {
     samples *= .3; // exponent compensation
-    ave = (float)(samples-1) / (float)samples * ave  + (float)MVPComms.Sensor[channel]/(float)samples ;
+    ave[channel] = (float)(samples-1) / (float)samples * ave[channel]  + (float)MVPComms.SensorVal[channel]/(float)samples ;
   }
-  else
-    ave = 0; //reset
+  else{
+    for(i=0;i<10;i++)
+      ave[i] = 0; //reset
+  }
 }
 
 
@@ -553,7 +674,7 @@ byte GetInput(void)
 
 // Turn off all mvp outputs
 //
-void ResetMVPOut(&MVPComms)
+void ResetMVPOut(struct TMVPComms *MVPComms)
 {
   byte i;
   
@@ -561,7 +682,7 @@ void ResetMVPOut(&MVPComms)
     MVPComms->Solenoid[i] = 0;
     
   for(i=0;i<4;i++)
-    SensorSupply[i] = 0;
+    MVPComms->SensorSupply[i] = 0;
 }
 
 
@@ -571,100 +692,97 @@ void ResetMVPOut(&MVPComms)
 int UpdateMVP(struct TMVPComms *MVPComms)
 {
   int result,i=0;
-  static byte TxBuffer[100];
-  static byte RxBuffer[100];
-  
+  byte Buffer[100];
+
  
   //  =========================================================================
   // === 1st processor TX                                                    ===
   //  =========================================================================
-  memset(TxBuffer,0,sizeof(TxBuffer));
+  memset(Buffer,0,sizeof(Buffer));
   //SoftSerial.setTimeout(50);
   
   digitalWrite(TXMODE, HIGH);
   delay(5);
   
-  TxBuffer[i++] = ADDRESS;
-  TxBuffer[i++] = 4;
-  TxBuffer[i++] = 0;
-  TxBuffer[i++] = 0x15;
+  Buffer[i++] = ADDRESS;
+  Buffer[i++] = 4;
+  Buffer[i++] = 0;
+  Buffer[i++] = 0x15;
   
-  TxBuffer[i++] = abs(MVPComms->Solenoid[0] ); //1,2
-  TxBuffer[i++] = abs(MVPComms->Solenoid[1] );
-  TxBuffer[i++] = abs(MVPComms->Solenoid[2] ); //5,6
-  TxBuffer[i++] = abs(MVPComms->Solenoid[3] );
-  TxBuffer[i++] = abs(MVPComms->Solenoid[4] ); //9,10
-  TxBuffer[i++] = abs(MVPComms->Solenoid[5] );
-  TxBuffer[i++] = abs(MVPComms->Solenoid[6] ); //13.14
-  TxBuffer[i++] = abs(MVPComms->Solenoid[7] );
-  TxBuffer[i++] = abs(MVPComms->Solenoid[8] ); //17,18
-  TxBuffer[i++] = abs(MVPComms->Solenoid[9] );
-  TxBuffer[i++] = abs(MVPComms->Solenoid[10] ); //21,22
-  TxBuffer[i++] = abs(MVPComms->Solenoid[11] );
-  TxBuffer[i++] = abs(MVPComms->Solenoid[12] ); //25,26
-  TxBuffer[i++] = abs(MVPComms->Solenoid[13] );
-  TxBuffer[i++] = abs(MVPComms->Solenoid[14] ); //29,30
-
-  // sol 9-16
-  TxBuffer[i] = 0;
-  if(MVPComms->Solenoid[4] > 0) TxBuffer[i] += 1;
-  if(MVPComms->Solenoid[4] < 0) TxBuffer[i] += 2;
-  if(MVPComms->Solenoid[5] > 0) TxBuffer[i] += 4;
-  if(MVPComms->Solenoid[5] < 0) TxBuffer[i] += 8;
-  if(MVPComms->Solenoid[6] > 0) TxBuffer[i] += 16;
-  if(MVPComms->Solenoid[6] < 0) TxBuffer[i] += 32;
-  if(MVPComms->Solenoid[7] > 0) TxBuffer[i] += 64;
-  if(MVPComms->Solenoid[7] < 0) TxBuffer[i] += 128;
+  Buffer[i++] = abs(MVPComms->Solenoid[0] ); //1,2
+  Buffer[i++] = abs(MVPComms->Solenoid[1] );
+  Buffer[i++] = abs(MVPComms->Solenoid[2] ); //5,6
+  Buffer[i++] = abs(MVPComms->Solenoid[3] );
+  Buffer[i++] = abs(MVPComms->Solenoid[4] ); //9,10
+  Buffer[i++] = abs(MVPComms->Solenoid[5] );
+  Buffer[i++] = abs(MVPComms->Solenoid[6] ); //13.14
+  Buffer[i++] = abs(MVPComms->Solenoid[7] );
+  Buffer[i++] = abs(MVPComms->Solenoid[8] ); //17,18
+  Buffer[i++] = abs(MVPComms->Solenoid[9] );
+  Buffer[i++] = abs(MVPComms->Solenoid[10] ); //21,22
+  Buffer[i++] = abs(MVPComms->Solenoid[11] );
+  Buffer[i++] = abs(MVPComms->Solenoid[12] ); //25,26
+  Buffer[i++] = abs(MVPComms->Solenoid[13] );
+  Buffer[i++] = abs(MVPComms->Solenoid[14] ); //29,30
+   // sol 9-16
+  Buffer[i] = 0;
+  if(MVPComms->Solenoid[4] > 0) Buffer[i] += 1;
+  if(MVPComms->Solenoid[4] < 0) Buffer[i] += 2;
+  if(MVPComms->Solenoid[5] > 0) Buffer[i] += 4;
+  if(MVPComms->Solenoid[5] < 0) Buffer[i] += 8;
+  if(MVPComms->Solenoid[6] > 0) Buffer[i] += 16;
+  if(MVPComms->Solenoid[6] < 0) Buffer[i] += 32;
+  if(MVPComms->Solenoid[7] > 0) Buffer[i] += 64;
+  if(MVPComms->Solenoid[7] < 0) Buffer[i] += 128;
   i++;
   
    // sol 1-8
-  TxBuffer[i] = 0;
-  if(MVPComms->Solenoid[0] > 0) TxBuffer[i] += 1;
-  if(MVPComms->Solenoid[0] < 0) TxBuffer[i] += 2;
-  if(MVPComms->Solenoid[1] > 0) TxBuffer[i] += 4;
-  if(MVPComms->Solenoid[1] < 0) TxBuffer[i] += 8;
-  if(MVPComms->Solenoid[2] > 0) TxBuffer[i] += 16;
-  if(MVPComms->Solenoid[2] < 0) TxBuffer[i] += 32;
-  if(MVPComms->Solenoid[3] > 0) TxBuffer[i] += 64;
-  if(MVPComms->Solenoid[3] < 0) TxBuffer[i] += 128;
+  Buffer[i] = 0;
+  if(MVPComms->Solenoid[0] > 0) Buffer[i] += 1;
+  if(MVPComms->Solenoid[0] < 0) Buffer[i] += 2;
+  if(MVPComms->Solenoid[1] > 0) Buffer[i] += 4;
+  if(MVPComms->Solenoid[1] < 0) Buffer[i] += 8;
+  if(MVPComms->Solenoid[2] > 0) Buffer[i] += 16;
+  if(MVPComms->Solenoid[2] < 0) Buffer[i] += 32;
+  if(MVPComms->Solenoid[3] > 0) Buffer[i] += 64;
+  if(MVPComms->Solenoid[3] < 0) Buffer[i] += 128;
   i++;
   
   // 25-30 & PSU 1-4
-  TxBuffer[i] = 0;
-  if(MVPComms->Solenoid[12] > 0) TxBuffer[i] += 1;
-  if(MVPComms->Solenoid[12] < 0) TxBuffer[i] += 2;
-  if(MVPComms->Solenoid[13] > 0) TxBuffer[i] += 4;
-  if(MVPComms->Solenoid[13] < 0) TxBuffer[i] += 8;
-  if(MVPComms->Solenoid[14] > 0) TxBuffer[i] += 16;
-  if(MVPComms->Solenoid[14] < 0) TxBuffer[i] += 32;
-  if(MVPComms->SensorSupply[0] > 0) TxBuffer[i] += 64; // PSU 1 & 2
-  if(MVPComms->SensorSupply[1] < 0) TxBuffer[i] += 128; // PSU 3 & 4
+  Buffer[i] = 0;
+  if(MVPComms->Solenoid[12] > 0) Buffer[i] += 1;
+  if(MVPComms->Solenoid[12] < 0) Buffer[i] += 2;
+  if(MVPComms->Solenoid[13] > 0) Buffer[i] += 4;
+  if(MVPComms->Solenoid[13] < 0) Buffer[i] += 8;
+  if(MVPComms->Solenoid[14] > 0) Buffer[i] += 16;
+  if(MVPComms->Solenoid[14] < 0) Buffer[i] += 32;
+  if(MVPComms->SensorSupply[0] > 0) Buffer[i] += 64; // PSU 1 & 2
+  if(MVPComms->SensorSupply[1] < 0) Buffer[i] += 128; // PSU 3 & 4
   i++;
   
   // 17-24
-  TxBuffer[i] = 0;
-  if(MVPComms->Solenoid[8] > 0) TxBuffer[i] += 1;
-  if(MVPComms->Solenoid[8] < 0) TxBuffer[i] += 2;
-  if(MVPComms->Solenoid[9] > 0) TxBuffer[i] += 4;
-  if(MVPComms->Solenoid[9] < 0) TxBuffer[i] += 8;
-  if(MVPComms->Solenoid[10] > 0) TxBuffer[i] += 16;
-  if(MVPComms->Solenoid[10] < 0) TxBuffer[i] += 32;
-  if(MVPComms->Solenoid[11] > 0) TxBuffer[i] += 64; 
-  if(MVPComms->Solenoid[11] < 0) TxBuffer[i] += 128; 
-  i++;
-  
-   TxBuffer[i++] = 0;
+  Buffer[i] = 0;
+  if(MVPComms->Solenoid[8] > 0) Buffer[i] += 1;
+  if(MVPComms->Solenoid[8] < 0) Buffer[i] += 2;
+  if(MVPComms->Solenoid[9] > 0) Buffer[i] += 4;
+  if(MVPComms->Solenoid[9] < 0) Buffer[i] += 8;
+  if(MVPComms->Solenoid[10] > 0)Buffer[i] += 16;
+  if(MVPComms->Solenoid[10] < 0)Buffer[i] += 32;
+  if(MVPComms->Solenoid[11] > 0) Buffer[i] += 64; 
+  if(MVPComms->Solenoid[11] < 0) Buffer[i] += 128; 
+  i++;  
+   Buffer[i++] = 0;
    
   // PSU 5-10
-  TxBuffer[i] = 0;
-  if(MVPComms->SensorSupply[2] > 0) TxBuffer[i] += 1;
-  if(MVPComms->SensorSupply[3] < 0) TxBuffer[i] += 2;
-  if(MVPComms->SensorSupply[4] > 0) TxBuffer[i] += 4;
-  if(MVPComms->MoistPwr) TxBuffer[i] += 8;  // Moist PSU
+  Buffer[i] = 0;
+  if(MVPComms->SensorSupply[2] > 0) Buffer[i] += 1;
+  if(MVPComms->SensorSupply[3] < 0) Buffer[i] += 2;
+  if(MVPComms->SensorSupply[4] > 0) Buffer[i] += 4;
+  if(MVPComms->MoistPwr) Buffer[i] += 8;  // Moist PSU
   i++;
   
   // CRC 
-  CalcCRC(TxBuffer,i /*tgt*/);
+  CalcCRC(Buffer,i /*tgt*/);
   i+=2;
   
   // Serial stuff
@@ -672,44 +790,44 @@ int UpdateMVP(struct TMVPComms *MVPComms)
   /*Serial.println("Dump...");
   for(i=0;i<27;i++)
   {
-    Serial.print(TxBuffer[i],HEX);
+    Serial.print(Buffer[i],HEX);
     Serial.print(",");
   }*/
   Serial.println("!");
-  SoftSerial.write(TxBuffer, i); //waits till txd
+  SoftSerial.write(Buffer, i); //waits till txd
   digitalWrite(TXMODE, LOW);
   
   //  =========================================================================
   // === 1st processor RX                                                    ===
   //  =========================================================================
   //Serial.println("");Serial.print("A");
-  memset(RxBuffer,0,sizeof(RxBuffer));
-  SoftSerial.readBytes(RxBuffer, 23);
+  memset(Buffer,0,sizeof(Buffer));
+  SoftSerial.readBytes(Buffer, 23);
    
-  result = CheckCRC(RxBuffer,21); 
+  result = CheckCRC(Buffer,21); 
      
   i=0;
 
   if(result)
   { 
-    if(RxBuffer[i++] != ADDRESS + 16)
+    if(Buffer[i++] != ADDRESS + 16)
       return -1;
       
-    if(RxBuffer[i++] != 4)
+    if(Buffer[i++] != 4)
       return -2;
    
     i+=2;
-    if(RxBuffer[i++] != 0x10)
+    if(Buffer[i++] != 0x10)
       return -3;
 
-    MVPComms->SensorVal[0] = RxBuffer[6] + (RxBuffer[5] << 8);
-    MVPComms->SensorVal[1] = RxBuffer[8] + (RxBuffer[7] << 8);
-    MVPComms->SensorVal[2] = RxBuffer[10] + (RxBuffer[9] << 8);
-    MVPComms->SensorVal[3] = RxBuffer[12] + (RxBuffer[11] << 8);
-    MVPComms->SensorVal[4] = RxBuffer[14] + (RxBuffer[13] << 8);  
-    MVPComms->SensorVal[5] = RxBuffer[16] + (RxBuffer[15] << 8);
-    MVPComms->SensorVal[6] = RxBuffer[18] + (RxBuffer[17] << 8);
-    MVPComms->SensorVal[7] = RxBuffer[20] + (RxBuffer[19] << 8);
+    MVPComms->SensorVal[0] = Buffer[6] + (Buffer[5] << 8);
+    MVPComms->SensorVal[1] = Buffer[8] + (Buffer[7] << 8);
+    MVPComms->SensorVal[2] = Buffer[10] + (Buffer[9] << 8);
+    MVPComms->SensorVal[3] = Buffer[12] + (Buffer[11] << 8);
+    MVPComms->SensorVal[4] = Buffer[14] + (Buffer[13] << 8);  
+    MVPComms->SensorVal[5] = Buffer[16] + (Buffer[15] << 8);
+    MVPComms->SensorVal[6] = Buffer[18] + (Buffer[17] << 8);
+    MVPComms->SensorVal[7] = Buffer[20] + (Buffer[19] << 8);
   }
   else
     return -4;  
@@ -718,32 +836,32 @@ int UpdateMVP(struct TMVPComms *MVPComms)
   //  =========================================================================
   // === 2nd processor RX                                                    ===
   //  =========================================================================
-  memset(RxBuffer,0,sizeof(RxBuffer));
+  memset(Buffer,0,sizeof(Buffer));
   //Serial.println("B");
-  SoftSerial.readBytes(RxBuffer, 19);
+  SoftSerial.readBytes(Buffer, 19);
    
-  result = CheckCRC(RxBuffer,17); 
+  result = CheckCRC(Buffer,17); 
    
   i=0;
    
   if(result)
   {
-    if(RxBuffer[i++] != (ADDRESS + 32))
+    if(Buffer[i++] != (ADDRESS + 32))
       return -5;
       
-    if(RxBuffer[i++] != 4)
+    if(Buffer[i++] != 4)
       return -6;
       
     i+=2;
-    if(RxBuffer[i++] != 0x0c)
+    if(Buffer[i++] != 0x0c)
       return -7;
       
-    MVPComms->SensorVal[8] = RxBuffer[6] + (RxBuffer[5] << 8);
-    MVPComms->SensorVal[9] = RxBuffer[8] + (RxBuffer[7] << 8);
-    MVPComms->MoistVal = RxBuffer[10] + (RxBuffer[9] << 8);
-    MVPComms->TempVal = RxBuffer[12] + (RxBuffer[11] << 8);
-    MVPComms->PCBTemp = RxBuffer[14] + (RxBuffer[13] << 8);
-    MVPComms->PCBVolts = RxBuffer[16] + (RxBuffer[15] << 8);   
+    MVPComms->SensorVal[8] = Buffer[6] + (Buffer[5] << 8);
+    MVPComms->SensorVal[9] = Buffer[8] + (Buffer[7] << 8);
+    MVPComms->MoistVal = Buffer[10] + (Buffer[9] << 8);
+    MVPComms->TempVal = Buffer[12] + (Buffer[11] << 8);
+    MVPComms->PCBTemp = Buffer[14] + (Buffer[13] << 8);
+    MVPComms->PCBVolts = Buffer[16] + (Buffer[15] << 8);   
   }
   else
     return -8;  
@@ -811,48 +929,3 @@ int ring(int i,int len)
 }
 
 
-
-
-
-// run the test on the MFVP
-// ! return immediately
-byte RunTest_old(byte Speed)
-{
-  // main state machine variable
-  static int demand, state = 0;
-  byte result, ch;
-  
-  //clear incomming messgae area 
-  memset(&MVPComms,0,sizeof(MVPComms));
-  
-  
-  for(ch=0;ch<15;ch++)
-  {
-//DEBUG
-    MVPComms.SensorSupply[0]=1;
-    for(demand=-250;demand<250;demand+=499)
-    {
-      MVPComms.Solenoid[ch]=demand;
-      MVPComms.Solenoid[ ring(ch-1,15) ]=demand;
-      MVPComms.Solenoid[ ring(ch-2,15) ]=demand;
-      MVPComms.Solenoid[ ring(ch-3,15) ]=0;
-      result = UpdateMVP(&MVPComms);
-    }
-    //MVPComms.Solenoid[ch]=0;
-    /*Serial.print("[");
-    Serial.print(MVPComms.SensorVal[0]);
-    Serial.print(",");
-     Serial.print(MVPComms.SensorVal[1]);
-    Serial.print(",");
-     Serial.print(MVPComms.SensorVal[2]);
-    Serial.print(",");
-     Serial.print(MVPComms.SensorVal[3]);
-    Serial.print(",");
-     Serial.print(MVPComms.SensorVal[4]);
-    Serial.print(",");
-    //Serial.print(ch);
-    Serial.println("]");*/
-  
-  }
-  //delay(100);*/
-}
