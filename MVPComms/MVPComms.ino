@@ -24,8 +24,7 @@ SoftwareSerial SoftSerial(11, 10); // RX, TX
 #define BUSY 8
 #define DONE 9
 
-#define IS_MA 16
-#define IS_V  17
+
   
 struct TMVPComms {
 
@@ -45,9 +44,16 @@ struct TMVPComms {
  
 } MVPComms;
 
+// results defns 
+#define IS_MA 16
+#define IS_V  17
+
 // A structure to hold test results
+// true = pass, false = fail
+//
 struct TMVPResults {
   bool   AddressFound;    // did we find the board?
+  bool   IsNewBoard;      // old / new MFVP PCB
   bool   TestComplete;    // finished?
   byte   TestNum;         // # tests done so far
   byte   SensorDrive[10]; // includes config info mA/V
@@ -58,7 +64,7 @@ struct TMVPResults {
   bool   PCBTemp;
   bool   PropDrive[15];   // prop results
   bool   PropNull[15];
-  bool   Fail;            // were there any fails?
+  bool   Fail;            // were there any fails? 
   
   long   CommsOk;         // stats         
   long   CommsError;
@@ -236,12 +242,11 @@ void loop() // run over and over
     UpdateTerminal(); // 5s
     count = 0;
   }
-   UpdateLED(result);
+  UpdateLED(result);
 
-  // Need to average the hell out of this
+  // N.B. Need to average the hell out of this
   //
   Current = (analogRead(CURRENT_IN) -512) * 37;
-  //aveCurrent = Current * .01 + aveCurrent * .99;
 
 }// END loop
 
@@ -262,6 +267,7 @@ void ResetResults()
     MVPResults.SensorNull[i] = false;
   }
   
+  MVPResults.IsNewBoard = true; //default
   MVPResults.Moist = false;       
   MVPResults.Temp = false;        
   MVPResults.PCBVolts = false;   
@@ -301,48 +307,60 @@ void UpdateTerminal(void)
     // #1
     if(MVPResults.AddressFound){
       Serial.print(F("Test 1: Found board address at address "));
-      Serial.println(ADDRESS);
+      Serial.print(ADDRESS);
+      Serial.print(" / ");
+      Serial.print(ADDRESS,BIN);
+      if(MVPResults.IsNewBoard){
+        Serial.println(" high(er) res board.");  
+      }else{
+        Serial.println(" low res board.");   
+      }
     }else{
-      Serial.println(F("ERROR: - Can't communicate to board"));
+      Serial.println(F("Test 1: - Can't communicate to board on any address"));
     }
     if((tests--) == 0) return;
 
+
     // #2
-    Serial.print(F("Test 2: Proportionals on: "));
-    for(i=0;i<14;i++){
+    Serial.println(F("Test 2: Drive proportional channels into load resistor, check enough current is drawn."));
+    Serial.print("  ");
+    for(i=0;i<=14;i++){
       if(MVPResults.PropDrive[i])
-        Serial.print("ok, ");
+        Serial.print("Ok, ");
       else
-        Serial.print(",Fail ");
+        Serial.print("Fail, ");
     }
     if((tests--) == 0) return;
  
     // #3
-    Serial.print(F("Test 3: Proportionals off: "));
-    for(i=0;i<14;i++){
+    Serial.println(F("Test 3: Check proportionals channels turn off, they should consume no current."));
+    Serial.print("  ");
+    for(i=0;i<=14;i++){
       //Serial.print(i+1);
       if(MVPResults.PropNull[i])
-        Serial.print("ok, ");
+        Serial.print("Ok, ");
       else
         Serial.print("Fail, ");
     }
     if((tests--) == 0) return;
 
     // #4
-    Serial.print(F("Test 4: Sensors on: "));
-    for(i=0;i<9;i++){
+    Serial.println(F("Test 4: Feed sensor power supplies back into sensor inputs and detect configuration."));
+    Serial.print("  ");
+    for(i=0;i<=9;i++){
       if(MVPResults.SensorDrive[i]==IS_MA)
         Serial.print("mA ok, ");
       else if(MVPResults.PropDrive[i]==IS_V)
         Serial.print("V ok, ");
       else
-        Serial.print("fail, ");  
+        Serial.print("Fail, ");  
     }
     if((tests--) == 0) return;
 
     // #5
-    Serial.print(F("Test 5: Sensors off: "));
-    for(i=0;i<9;i++){
+    Serial.println(F("Test 5: Check sensor values are zero when power supplies are turned off. "));
+    Serial.print("  ");
+    for(i=0;i<=9;i++){
       Serial.print(i+1);
       if(MVPResults.SensorNull[i])
         Serial.print(":ok ");
@@ -352,35 +370,35 @@ void UpdateTerminal(void)
     if((tests--) == 0) return;
 
     // #6
-    Serial.print(F("Test 6: Moisture "));
+    Serial.print(F("Test 6: Check moisture turns on and off and sensor works: "));
       if(MVPResults.Moist)
-        Serial.print(":ok ");
+        Serial.print("ok ");
       else
-        Serial.print(":Fail ");
+        Serial.print("Fail ");
     if((tests--) == 0) return; 
   
     // #7
-    Serial.print(F("Test 7: Temp "));
+    Serial.print(F("Test 7: Check PT100 temperature input works: "));
       if(MVPResults.Temp)
-        Serial.print(":ok ");
+        Serial.print("Ok ");
       else
-        Serial.print(":Fail ");
+        Serial.print("Fail ");
     if((tests--) == 0) return;
 
     // #8
-    Serial.print(F("Test 8: PCBVolts "));
+    Serial.print(F("Test 8: Check onboard PCBVolts sensor works."));
       if(MVPResults.PCBVolts)
-        Serial.print(":ok ");
+        Serial.print("Ok ");
       else
-        Serial.print(":Fail ");  
+        Serial.print("Fail ");  
     if((tests--) == 0) return;
     
      // #9
-    Serial.print(F("Test 9: PCBTemp "));
+    Serial.print(F("Test 9: Check onboard PCBTemp sensor works. "));
       if(MVPResults.PCBTemp)
-        Serial.print(":ok ");
+        Serial.print("Ok ");
       else
-        Serial.print(":Fail ");  
+        Serial.print("Fail ");  
     if((tests--) == 0) return;
 
     if(MVPResults.TestComplete){
@@ -392,10 +410,12 @@ void UpdateTerminal(void)
       Serial.println(" errors ");
       Serial.println("");
    
-      if(MVPResults.Fail == true)
+      if(MVPResults.Fail == true){
         Serial.println(F("Test is complete, Failed"));
-      else
+      }
+      else {
         Serial.println(F("Test is complete, Pass"));
+      }
     }
   }
 }
@@ -404,7 +424,8 @@ void UpdateTerminal(void)
 // run the test on the MFVP
 // ! return immediately with BUSY /  DONE, the latter 2 stop this funct being called and conclude testing
 // In here we do a blocking comms poll, then check some test to see if it went ok
-// we return status and fill a char buffer which gets sent to the serial tty.
+// all test results get put in a structure.  When we reply DONE, we immediately restart so it's up to the calling 
+// funct to stop calling us.
 // 
 byte RunTest(byte Speed,int Current)
 {
@@ -752,6 +773,8 @@ byte RunTest(byte Speed,int Current)
 
 
 // calc average current, also has a reset function
+//  samples - 0 to reset else smoothing period
+//  Current - a float to smooth
 //
 int GetAveCurrent(byte samples,int Current)
 {
@@ -766,6 +789,8 @@ int GetAveCurrent(byte samples,int Current)
 }
 
 // calc average sensor value, also has a reset function
+//  samples - 0 to reset else it's the smoothing period.
+//  channel - to smooth 0-9 (ana) 10 (moist)
 //
 int GetAveSensor(byte samples,byte channel)
 {
@@ -808,7 +833,7 @@ void UpdateLED(byte Result)
   }
 }
 
-// We want to get user input here quick or long test
+// We want to get user input here quick or long test, hold in btn for long test
 //
 byte GetInput(void)
 {
@@ -822,7 +847,7 @@ byte GetInput(void)
       delay(80);
     }
     
-    if(x==20) {
+    if(x>15) {
       return SLOW;  //long
     } else {
       return FAST;  //short
@@ -839,11 +864,13 @@ void ResetMVPOut(struct TMVPComms *MVPComms)
 {
   byte i;
   
-  for(i=0;i<14;i++)
+  for(i=0;i<=14;i++)
     MVPComms->Solenoid[i] = 0;
     
-  for(i=0;i<4;i++)
+  for(i=0;i<=4;i++)
     MVPComms->SensorSupply[i] = 0;
+    
+  MVPComms->MoistPwr = 0;
 }
 
 
