@@ -1,4 +1,4 @@
-/*
+/* 
   Module: MVP Test program.
 
   Author: K Lawson
@@ -8,7 +8,7 @@
   Communicate to MVP @ 19K2 using soft serial
   Arduino monitor is @ 19K2 using Arduino UART
   
-  * A button allows for fast / slow test
+  * A button allows for fast / slow test - hold in for slower test / press for fast test
   * And a LED shows status
   * Comms to the board is over 485 using (soft ser)
   * A terminal displays test status info (default ser)
@@ -28,9 +28,9 @@ SoftwareSerial SoftSerial(11, 10); // RX, TX
   // Current FB - HI RES
   const int SOL_HI = 2120; // mA
   //2042
-  const int SOL_LO = 1980; // mA
-  const int SOL_OFF = 210;  //nominally it's 180mA just to power the board
-  const int SOL_DRIVE = 230; // 0-255 demand
+  const int SOL_LO = 1930; // mA
+  int SOL_OFF_LOAD = 210;  //nominally it's 180mA just to power the board
+  int SOL_DRIVE = 230; // 0-255 demand
   
   // Sensors
   const int mA_HI = 446; // 426 raw val
@@ -97,6 +97,7 @@ struct TMVPResults {
   int    PropDriveValA[15];
   int    PropDriveValB[15]; 
   int    PropNullVal[15]; 
+  
   int    SensorVal[10];
   int    SensorNullVal[10];
   bool   Fail;            // were there any fails? 
@@ -239,10 +240,10 @@ void loop() // run over and over
   
   // @@@@@ Clock routine at 20Hz 1 / (7ms + 38ms) @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
   // all functs must return immediately!
-  sampletime=80; //x .1ms conversion time - 7ms
+  sampletime=100; //x .1ms conversion time - 7ms
   while(sampletime){
     Current = (analogRead(CURRENT_IN) -512) * 36; //mA
-    aveCurrent = GetAveCurrent(500,Current); // # samples
+    aveCurrent = GetAveCurrent(1000,Current); // # samples
     sampletime--;
   };
    
@@ -351,7 +352,7 @@ void UpdateTerminal(void)
   Serial.write(27);
   Serial.print("[H");     // cursor to home command
 
-  Serial.println(F("======================= MFVP Board tester (Hi+Lo Res) ======================="));
+  Serial.println(F("=================== SMD MFVP Board tester (Hi/Lo Res) V1.0 ===================="));
   Serial.println("");
   tests = MVPResults.TestNum;
   if(MVPResults.RunningTest == false) {
@@ -363,14 +364,14 @@ void UpdateTerminal(void)
   {
     // #1
     if(MVPResults.AddressFound){
-      Serial.print(F("TEST1>>> Found board address at address "));
+      Serial.print(F("TEST1>>> Found board address at address #"));
       Serial.print(ADDRESS);
       Serial.print(" / ");
       Serial.print(ADDRESS,BIN);
       if(MVPResults.IsNewBoard){
-        Serial.println(" high(er) res board.");  
+        Serial.println(" - high(er) res board.");  
       }else{
-        Serial.println(" low res board.");   
+        Serial.println(" - low res board.");   
       }
     }else{
       Serial.println(F("TEST1>>> Can't communicate to board on any address"));
@@ -423,9 +424,9 @@ void UpdateTerminal(void)
     // #4
     Serial.println();
     Serial.print(F("TEST4>>> Check proportionals channels turn off, board consumes <"));
-    Serial.print(SOL_OFF);
+    Serial.print(SOL_OFF_LOAD);
     Serial.println("mA");
-    
+
     Serial.print("  ");
     for(i=0;i<=14;i++){
       if(i==8){
@@ -433,10 +434,11 @@ void UpdateTerminal(void)
         Serial.print("  ");
       }
       Serial.print(MVPResults.PropNullVal[i]);
-      if(MVPResults.PropNull[i])
+      if(MVPResults.PropNull[i]){
         Serial.print(" ok, ");
-      else
+      } else {
         Serial.print(" fail, ");
+      }
     }
     //Serial.println();
     if((--tests) == 0) return;
@@ -609,18 +611,20 @@ byte RunTest(byte Speed,int Current)
             statecnt=0;
             channel=0;
             state++;
+            GetAveCurrent(0,0);
             ADDRESS=1;
             Attempt=0;
             if(Speed == FAST){
-              SAMPLES = 100;
+              SAMPLES = 50;
             }
             else{  
-              SAMPLES = 2000;
+              SAMPLES = 150;
             } 
             break;
      
      case 1: // board addr scan
             statecnt++;
+            aveCurrent = Current; // # now averaged elsewhere
             // @ check...
             if(statecnt==2){ //3 goes, it's slow due to timeout
               statecnt=0;
@@ -635,7 +639,7 @@ byte RunTest(byte Speed,int Current)
               ADDRESS = 0;
             }
               
-            if((ADDRESS==17) && (Attempt == 4)){
+            if((ADDRESS==17) && (Attempt == 5)){
                 MVPResults.AddressFound = false; 
                 MVPResults.TestNum++;
                 state = 0;
@@ -649,6 +653,16 @@ byte RunTest(byte Speed,int Current)
               channel = 0;
               statecnt = 0;
               GetAveCurrent(0,0);
+              // new board / old board detection?
+              if(aveCurrent < 220) {// new board 170-190
+                SOL_OFF_LOAD = 210; // for no load test criterea
+                SOL_DRIVE = 230;
+                MVPResults.IsNewBoard = true;    
+              } else { // range is 231-271mA for old board
+                SOL_OFF_LOAD = 290;
+                SOL_DRIVE = 94;
+                MVPResults.IsNewBoard = false;  
+              }      
             }
             break;
             
@@ -724,15 +738,14 @@ byte RunTest(byte Speed,int Current)
             // 
             // @ check...
             aveCurrent = GetAveCurrent(SAMPLES,Current); // # samples
-            MVPComms.Solenoid[channel] = 0;
             
             statecnt++;            
-            if(statecnt==SAMPLES){
+            if(statecnt==20){
               statecnt=0;          
               GetAveCurrent(0,0); // reset
               
               // -->> test results
-              if(aveCurrent < SOL_OFF){
+              if(aveCurrent < SOL_OFF_LOAD){
                 // ok, current is good
                 MVPResults.PropNull[channel] = true;
               } else {
@@ -740,12 +753,13 @@ byte RunTest(byte Speed,int Current)
                 MVPResults.PropNull[channel] = false;
                 MVPResults.Fail = true;
               }
+              MVPResults.PropNullVal[channel] = aveCurrent;
               channel++;
             }
-            MVPResults.PropNullVal[channel] = aveCurrent;
+            
             
             // -->> done
-            if(channel==15) {
+            if(channel==17) {
               MVPResults.TestNum++;
               state++;
               channel = 0;
@@ -797,7 +811,7 @@ byte RunTest(byte Speed,int Current)
             aveSensor = GetAveSensor(SAMPLES,channel); // # sample
             statecnt++;
             
-            if(statecnt==SAMPLES){
+            if(statecnt==20){
               statecnt=0;
               
               GetAveSensor(0,0); // reset
@@ -1058,8 +1072,12 @@ byte GetInput(void)
     }
     
     if(x>15) {
+      Serial.println("Running normal test");
+      delay(500);
       return SLOW;  //long
     } else {
+      Serial.println("Running short test");
+      delay(500);
       return FAST;  //short
     } 
   }
@@ -1325,4 +1343,5 @@ int ring(int i,int len)
   if(i<0)
     return i+len;
 }
+
 
