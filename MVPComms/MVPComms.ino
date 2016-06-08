@@ -24,7 +24,29 @@ SoftwareSerial SoftSerial(11, 10); // RX, TX
 #define BUSY 8
 #define DONE 9
 
-
+// define test constants
+  // Current FB - HI RES
+  const int SOL_HI = 2120; // mA
+  //2042
+  const int SOL_LO = 1980; // mA
+  const int SOL_OFF = 210;  //nominally it's 180mA just to power the board
+  const int SOL_DRIVE = 230; // 0-255 demand
+  
+  // Sensors
+  const int mA_HI = 446; // 426 raw val
+  const int mA_LO = 406;
+  const int V_HI = 988; // 968
+  const int V_LO = 948;
+  const int SEN_OFF = 10;
+  const int MOIST_MIN = 672; //692
+  const int MOIST_MAX = 712;
+  const int TEMP_MIN = 498; //518
+  const int TEMP_MAX = 538;
+  const int PCBV_MIN = 514; //534
+  const int PCBV_MAX = 554; 
+  const int PCBT_MIN = 567; //587
+  const int PCBT_MAX = 627; 
+  
   
 struct TMVPComms {
 
@@ -62,8 +84,21 @@ struct TMVPResults {
   bool   Temp;            // pt100 ip
   bool   PCBVolts;        // PBC onboards...
   bool   PCBTemp;
-  bool   PropDrive[15];   // prop results
+
+  int   MoistVal;           // moist ip
+  int   TempVal;            // pt100 ip
+  int   PCBVoltsVal;        // PBC onboards...
+  int   PCBTempVal;
+  
+  bool   RunningTest;
+  bool   PropDriveA[15];   // prop results
+  bool   PropDriveB[15];
   bool   PropNull[15];
+  int    PropDriveValA[15];
+  int    PropDriveValB[15]; 
+  int    PropNullVal[15]; 
+  int    SensorVal[10];
+  int    SensorNullVal[10];
   bool   Fail;            // were there any fails? 
   
   long   CommsOk;         // stats         
@@ -181,14 +216,13 @@ void setup()
   digitalWrite(BUTTON_OUT,LOW);
  
   Serial.begin(19200);
-  while (!Serial) {
+   while (!Serial) {
     ; // wait for serial port to connect. Needed for Leonardo only
   }
 
-  Serial.println("Init...");
-
   // set the data rate for the SoftwareSerial port (MFVP)
   SoftSerial.begin(19200);
+  SoftSerial.setTimeout(100); //make addr scan faster
  
 }
 
@@ -199,37 +233,44 @@ void loop() // run over and over
 {
   static int Current,aveCurrent;
   static byte state,result=BUSY;
-  byte mode; 
-  static int count;
+  byte mode,sampletime; 
+  static unsigned long Update = 0;
   
-  // @@@@@ Clock routine at 200Hz @@@@@@@@
+  
+  // @@@@@ Clock routine at 20Hz 1 / (7ms + 38ms) @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
   // all functs must return immediately!
-  delay(5);
-  
+  sampletime=80; //x .1ms conversion time - 7ms
+  while(sampletime){
+    Current = (analogRead(CURRENT_IN) -512) * 36; //mA
+    aveCurrent = GetAveCurrent(500,Current); // # samples
+    sampletime--;
+  };
+   
   // @@@@ SM FOR AUTO TEST @@@@@@@@  
   switch(state){
     // get user input
     case 0: mode = GetInput(); // can hang for 2s initially
             state = mode; 
             if(mode > 0) {
-              ResetResults();       
+              ResetResults();  
+              Update=millis()+5; // kick terminal     
             }        
             ResetMVPOut(&MVPComms); //zero all outputs
             break;
             
     // execute test fast
     case FAST: 
-            result = RunTest(FAST,Current); 
+            result = RunTest(FAST,aveCurrent); // note this will take 38ms to execute due to bus timings and the fact it's a blocking transaction
             if(result != BUSY) {
-               state == 0;
+               state = 0;
             }         
             break;
             
     //execute test slow
     case SLOW:
-            result = RunTest(SLOW,Current);
+           result = RunTest(SLOW,aveCurrent);
             if(result != BUSY) {
-               state == 0;
+               state = 0;
             }
             break;
   }
@@ -237,16 +278,16 @@ void loop() // run over and over
   
   // Periodic terminal update.
   // 
-  count++;
-  if(count==1000) {
+  if(millis() > Update) {
+    if(MVPResults.TestComplete == true){
+      Update = millis() + 15000; 
+    }
+    else{
+      Update = millis() + 5000; //done
+    }
     UpdateTerminal(); // 5s
-    count = 0;
   }
   UpdateLED(result);
-
-  // N.B. Need to average the hell out of this
-  //
-  Current = (analogRead(CURRENT_IN) -512) * 37;
 
 }// END loop
 
@@ -258,13 +299,21 @@ void ResetResults()
 {
   byte i;
 
+  MVPResults.RunningTest = false;
   MVPResults.AddressFound = false; 
   MVPResults.TestNum = 0;
   MVPResults.TestComplete = false; 
   
+  MVPResults.MoistVal = 0;           // moist ip
+  MVPResults.TempVal = 0;            // pt100 ip
+  MVPResults.PCBVoltsVal = 0;        // PBC onboards...
+  MVPResults.PCBTempVal = 0;
+  
   for(i=0;i<10;i++) {
     MVPResults.SensorDrive[i] = 0;  
     MVPResults.SensorNull[i] = false;
+    MVPResults.SensorVal[i] = 0;
+    MVPResults.SensorNullVal[i] = 0;
   }
   
   MVPResults.IsNewBoard = true; //default
@@ -274,13 +323,18 @@ void ResetResults()
   MVPResults.PCBTemp = false;   
   MVPResults.Fail = false;
   
-  for(i=0;i<10;i++) {
-    MVPResults.PropDrive[i] = false;
+  for(i=0;i<=14;i++) {
+    MVPResults.PropDriveA[i] = false;
+    MVPResults.PropDriveB[i] = false;
     MVPResults.PropNull[i] = false;
+    MVPResults.PropNullVal[i] = 0;
+    MVPResults.PropDriveValA[i] = false;
+    MVPResults.PropDriveValB[i] = false;
   }
 
   MVPResults.CommsOk=0;
   MVPResults.CommsError= 0;
+  ADDRESS = 0;
 } 
 
 
@@ -289,6 +343,7 @@ void ResetResults()
 void UpdateTerminal(void)
 {
   byte tests,i;
+  bool wasfault=false;
   
   // clear screen
   Serial.write(27);       // ESC command
@@ -296,17 +351,19 @@ void UpdateTerminal(void)
   Serial.write(27);
   Serial.print("[H");     // cursor to home command
 
-  Serial.println(F("======== MFVP Board tester (Hi-res only) ========"));
+  Serial.println(F("======================= MFVP Board tester (Hi+Lo Res) ======================="));
   Serial.println("");
-
   tests = MVPResults.TestNum;
-  if(tests == 0) {
-     Serial.println(F("Waiting for user input..."));
+  if(MVPResults.RunningTest == false) {
+    Serial.println(F("Waiting for user input..."));
+  }
+  else if (tests == 0) {
+    Serial.println(F("Scanning possible MVP Addresses..."));
   }else
   {
     // #1
     if(MVPResults.AddressFound){
-      Serial.print(F("Test 1: Found board address at address "));
+      Serial.print(F("TEST1>>> Found board address at address "));
       Serial.print(ADDRESS);
       Serial.print(" / ");
       Serial.print(ADDRESS,BIN);
@@ -316,105 +373,207 @@ void UpdateTerminal(void)
         Serial.println(" low res board.");   
       }
     }else{
-      Serial.println(F("Test 1: - Can't communicate to board on any address"));
+      Serial.println(F("TEST1>>> Can't communicate to board on any address"));
     }
-    if((tests--) == 0) return;
-
+    if(MVPResults.AddressFound == false) return;
 
     // #2
-    Serial.println(F("Test 2: Drive proportional channels into load resistor, check enough current is drawn."));
-    Serial.print("  ");
-    for(i=0;i<=14;i++){
-      if(MVPResults.PropDrive[i])
-        Serial.print("Ok, ");
-      else
-        Serial.print("Fail, ");
-    }
-    if((tests--) == 0) return;
+    Serial.print(F("TEST2>>> Drive prop A channels, check current is between "));
+    Serial.print(SOL_HI);
+    Serial.print("mA and ");
+    Serial.print(SOL_LO);
+    Serial.println("mA");
  
-    // #3
-    Serial.println(F("Test 3: Check proportionals channels turn off, they should consume no current."));
     Serial.print("  ");
     for(i=0;i<=14;i++){
-      //Serial.print(i+1);
-      if(MVPResults.PropNull[i])
-        Serial.print("Ok, ");
+      if(i==8){
+        Serial.println();
+        Serial.print("  ");
+      }
+      Serial.print(MVPResults.PropDriveValA[i]);
+      if(MVPResults.PropDriveA[i])
+        Serial.print(" ok, ");
       else
-        Serial.print("Fail, ");
+        Serial.print(" fail, ");
     }
-    if((tests--) == 0) return;
-
-    // #4
-    Serial.println(F("Test 4: Feed sensor power supplies back into sensor inputs and detect configuration."));
+    if((--tests) == 0) return;
+ 
+    // #3  
+    Serial.println();
+    Serial.print(F("TEST3>>> Drive prop B channels, check current is between "));
+    Serial.print(SOL_HI);
+    Serial.print("mA and ");
+    Serial.print(SOL_LO);
+    Serial.println("mA");
+    
     Serial.print("  ");
-    for(i=0;i<=9;i++){
-      if(MVPResults.SensorDrive[i]==IS_MA)
-        Serial.print("mA ok, ");
-      else if(MVPResults.PropDrive[i]==IS_V)
-        Serial.print("V ok, ");
+    for(i=0;i<=14;i++){
+      if(i==8){
+        Serial.println();
+        Serial.print("  ");
+      }
+      Serial.print(MVPResults.PropDriveValB[i]);
+      if(MVPResults.PropDriveB[i])
+        Serial.print(" ok, ");
       else
-        Serial.print("Fail, ");  
+        Serial.print(" fail, ");
     }
-    if((tests--) == 0) return;
+    if((--tests) == 0) return;
+    
+    // #4
+    Serial.println();
+    Serial.print(F("TEST4>>> Check proportionals channels turn off, board consumes <"));
+    Serial.print(SOL_OFF);
+    Serial.println("mA");
+    
+    Serial.print("  ");
+    for(i=0;i<=14;i++){
+      if(i==8){
+        Serial.println();
+        Serial.print("  ");
+      }
+      Serial.print(MVPResults.PropNullVal[i]);
+      if(MVPResults.PropNull[i])
+        Serial.print(" ok, ");
+      else
+        Serial.print(" fail, ");
+    }
+    //Serial.println();
+    if((--tests) == 0) return;
 
     // #5
-    Serial.println(F("Test 5: Check sensor values are zero when power supplies are turned off. "));
+    Serial.println();
+    Serial.println(F("TEST5>>> Test sensor power supplies & inputs, detect config"));
     Serial.print("  ");
     for(i=0;i<=9;i++){
-      Serial.print(i+1);
-      if(MVPResults.SensorNull[i])
-        Serial.print(":ok ");
-      else
-        Serial.print(":Fail ");
+      if(i==5){
+        Serial.println();
+        Serial.print("  ");
+      }
+      Serial.print(MVPResults.SensorVal[i]);
+      if(MVPResults.SensorDrive[i]==IS_MA) {
+        Serial.print(" mA ok, ");
+      }
+      else if(MVPResults.SensorDrive[i]==IS_V) {
+        Serial.print(" V ok, ");
+      } else {
+        Serial.print(" fail, ");  
+      }
     }
-    if((tests--) == 0) return;
 
-    // #6
-    Serial.print(F("Test 6: Check moisture turns on and off and sensor works: "));
-      if(MVPResults.Moist)
-        Serial.print("ok ");
-      else
-        Serial.print("Fail ");
-    if((tests--) == 0) return; 
-  
-    // #7
-    Serial.print(F("Test 7: Check PT100 temperature input works: "));
-      if(MVPResults.Temp)
-        Serial.print("Ok ");
-      else
-        Serial.print("Fail ");
-    if((tests--) == 0) return;
-
-    // #8
-    Serial.print(F("Test 8: Check onboard PCBVolts sensor works."));
-      if(MVPResults.PCBVolts)
-        Serial.print("Ok ");
-      else
-        Serial.print("Fail ");  
-    if((tests--) == 0) return;
+    if((--tests) == 0) return;
+    for(i=0;i<=9;i+=2){
+      if((MVPResults.SensorDrive[i] == 0) && (MVPResults.SensorDrive[i+1] == 0)) {
+        Serial.println();
+        Serial.print("  Tip - this looks like a power supply fault");
+        break;
+      }
+    } 
+    for(i=0;i<=9;i+=2){
+      if((MVPResults.SensorDrive[i] == 0 && MVPResults.SensorDrive[i+1] == 1) && (MVPResults.SensorDrive[i] == 1 && MVPResults.SensorDrive[i+1] == 0)) {
+        Serial.println("");
+        Serial.print("  Tip - this looks like a sensor fault");
+        break;
+      }
+    } 
+    Serial.println("");
     
-     // #9
-    Serial.print(F("Test 9: Check onboard PCBTemp sensor works. "));
-      if(MVPResults.PCBTemp)
-        Serial.print("Ok ");
+    // #6
+    Serial.println(F("TEST6>>> Check sensor values are zero when power supplies are turned off. "));
+    Serial.print("  ");
+    for(i=0;i<=9;i++){
+      Serial.print(MVPResults.SensorNullVal[i]);
+      
+      if(MVPResults.SensorNull[i])
+        Serial.print(" ok,");
       else
-        Serial.print("Fail ");  
-    if((tests--) == 0) return;
+        Serial.print(" fail,");
+    }
+    if((--tests) == 0) return;
+    if(((MVPResults.SensorNull[0] == 0) && (MVPResults.SensorNull[1] == 0)) || 
+       ((MVPResults.SensorNull[2] == 0) && (MVPResults.SensorNull[3] == 0)) ||
+       ((MVPResults.SensorNull[4] == 0) && (MVPResults.SensorNull[5] == 0)) ||
+       ((MVPResults.SensorNull[6] == 0) && (MVPResults.SensorNull[7] == 0)) ||
+       ((MVPResults.SensorNull[8] == 0) && (MVPResults.SensorNull[9] == 0)) )  
+    {
+      Serial.println();
+      Serial.print("  Tip - this looks like a power supply fault");
+    }
+    
+    if((MVPResults.SensorNull[0] != MVPResults.SensorNull[1]) || 
+       (MVPResults.SensorNull[2] != MVPResults.SensorNull[3]) ||
+       (MVPResults.SensorNull[4] != MVPResults.SensorNull[5]) ||
+       (MVPResults.SensorNull[6] != MVPResults.SensorNull[7]) ||
+       (MVPResults.SensorNull[8] != MVPResults.SensorNull[9]))  
+    {
+      Serial.println();
+      Serial.print("  Tip - this looks like a power supply fault");
+    }
+  
+    for(i=0;i<=9;i+=2){
+      if((MVPResults.SensorDrive[i] == 0 && MVPResults.SensorDrive[i+1] == 1) && (MVPResults.SensorDrive[i] == 1 && MVPResults.SensorDrive[i+1] == 0)) {
+        Serial.println();
+        Serial.print("  Tip - this looks like a sensor fault");
+        break;
+      }
+    }   
+
+    // #7
+    Serial.println("");
+    Serial.print(F("TEST7>>> Check moisture turns on and off and sensor works: "));
+    Serial.print(  MVPResults.MoistVal );           // moist ip
+      if(MVPResults.Moist) {
+        Serial.print(" ok ");
+      } else {
+        Serial.print(" fail ");
+      }
+    Serial.println("");
+    if((--tests) == 0) return; 
+  
+    // #8
+    Serial.print(F("TEST8>>> Check PT100 temperature input works: "));
+    Serial.print(  MVPResults.TempVal );            // pt100 ip
+      if(MVPResults.Temp)
+        Serial.print(" ok ");
+      else
+        Serial.print(" fail ");
+    Serial.println("");
+    if((--tests) == 0) return;
+
+    // #9
+    Serial.print(F("TEST9>>> Check onboard PCBVolts sensor works: "));
+    Serial.print(  MVPResults.PCBVoltsVal );        // PBC onboards...
+      if(MVPResults.PCBVolts)
+        Serial.print(" ok ");
+      else
+        Serial.print(" fail ");  
+    if((--tests) == 0) return;
+    
+    // #10
+    Serial.println();
+    Serial.print(F("TEST10>>> Check onboard PCBTemp sensor works: "));
+    Serial.print(  MVPResults.PCBTempVal );
+      if(MVPResults.PCBTemp)
+        Serial.print(" ok ");
+      else
+        Serial.print(" fail ");  
+    if((--tests) == 0) return;
 
     if(MVPResults.TestComplete){
-      Serial.println("");
+      Serial.println();
+      Serial.println();
+      Serial.print("DONE>>> ");
       Serial.print("Comms error rate was: ");
       Serial.print(MVPResults.CommsOk);
       Serial.print(" ok ");
       Serial.print(MVPResults.CommsError);
-      Serial.println(" errors ");
-      Serial.println("");
-   
+      Serial.print(" errors ");
+  
       if(MVPResults.Fail == true){
-        Serial.println(F("Test is complete, Failed"));
+        Serial.print(F("- Test has failed"));
       }
       else {
-        Serial.println(F("Test is complete, Pass"));
+        Serial.print(F("- Test has passed"));
       }
     }
   }
@@ -430,68 +589,60 @@ void UpdateTerminal(void)
 byte RunTest(byte Speed,int Current)
 {
   // main state machine variable
-  static byte state = 0,channel=0; //state machine vars
+  static byte Attempt=0, state = 0,channel=0; //state machine vars
   static char retval;      // return val 
   int aveCurrent,aveSensor;
   byte result;
   static int SAMPLES,statecnt=0;
 
-  // Current FB
-  const int SOL_HI = 1000; // mA
-  const int SOL_LO = 900; // mA
-  const int SOL_OFF = 20;
-  const int SOL_DRIVE = 50; // 0-255 demand
-  // Sensors
-  const int mA_HI = 500; // 0-1023 raw val
-  const int mA_LO = 480;
-  const int V_HI = 600;
-  const int V_LO = 500;
-  const int SEN_OFF = 10;
-  const int MOIST_MIN = 100;
-  const int MOIST_MAX = 200;
-  const int TEMP_MIN = 100;
-  const int TEMP_MAX = 200;
-  const int PCBV_MIN = 100;
-  const int PCBV_MAX = 200; 
-  const int PCBT_MIN = 100;
-  const int PCBT_MAX = 200;
-
   // clear incomming messgae area 
   result = UpdateMVP(&MVPComms);
+
   ResetMVPOut(&MVPComms); //zero all outputs
-   
-  
+
   // ok got comms now.
   switch(state)
   {
     case 0: // init 
+            MVPResults.RunningTest=true;
             retval = BUSY;
             statecnt=0;
             channel=0;
             state++;
             ADDRESS=1;
-            if(Speed == SLOW)
+            Attempt=0;
+            if(Speed == FAST){
               SAMPLES = 100;
-            else  
+            }
+            else{  
               SAMPLES = 2000;
-              
+            } 
             break;
      
      case 1: // board addr scan
             statecnt++;
             // @ check...
-            if(statecnt==SAMPLES){
+            if(statecnt==2){ //3 goes, it's slow due to timeout
               statecnt=0;
               ADDRESS++;
+              result=0;
+              Serial.print(ADDRESS-1);
+              Serial.print(",");
             }
             // -->> bad
             if(ADDRESS==17){
+              Attempt++;
+              ADDRESS = 0;
+            }
+              
+            if((ADDRESS==17) && (Attempt == 4)){
+                MVPResults.AddressFound = false; 
+                MVPResults.TestNum++;
                 state = 0;
                 retval = DONE;
                 MVPResults.Fail = true;
-            }
-            // -->> ok
-            if(result==1) {
+                Serial.println("FAIL!!!");
+            }else if (result==1) {
               MVPResults.AddressFound = true; 
               MVPResults.TestNum++;
               state++;
@@ -504,23 +655,25 @@ byte RunTest(byte Speed,int Current)
     case 2: // scan all proportional outputs (positive) ...
             // 
             // @ check...
-            aveCurrent = GetAveCurrent(SAMPLES,Current); // # samples
+            aveCurrent = Current; // # now averaged elsewhere
             MVPComms.Solenoid[channel] = SOL_DRIVE;
             
+            statecnt++;
             if(statecnt==SAMPLES){
               statecnt=0;
-              channel++;
               GetAveCurrent(0,0); // reset
               
               // -->> test results
               if((aveCurrent < SOL_HI) && (aveCurrent > SOL_LO)){
                 // ok, current is good
-                MVPResults.PropDrive[channel] = true;                          
+                MVPResults.PropDriveA[channel] = true;                          
               } else {
                 // fail
-                MVPResults.PropDrive[channel] = false;
+                MVPResults.PropDriveA[channel] = false;
                 MVPResults.Fail = true;
               }
+              MVPResults.PropDriveValA[channel] = aveCurrent;
+              channel++;
             }
             
             // -->> done
@@ -532,15 +685,50 @@ byte RunTest(byte Speed,int Current)
               GetAveSensor(0,0);
             }
             break;
-          
-    case 3: // scan all proportional outputs (null) ...
+    
+    case 3: // scan all proportional outputs (negative) ...
+            // 
+            // @ check...
+            aveCurrent = Current; // # now averaged elsewhere
+            MVPComms.Solenoid[channel] = -1 * SOL_DRIVE;
+            
+            statecnt++;
+            if(statecnt==SAMPLES){
+              statecnt=0;
+              GetAveCurrent(0,0); // reset
+              
+              // -->> test results
+              if((aveCurrent < SOL_HI) && (aveCurrent > SOL_LO)){
+                // ok, current is good
+                MVPResults.PropDriveB[channel] = true;                          
+              } else {
+                // fail
+                MVPResults.PropDriveB[channel] = false;
+                MVPResults.Fail = true;
+              }
+              MVPResults.PropDriveValB[channel] = aveCurrent;
+              channel++;
+            }
+            
+            // -->> done
+            if(channel==15) {
+              MVPResults.TestNum++;
+              state++;
+              channel = 0;
+              statecnt = 0;
+              GetAveSensor(0,0);
+            }
+            break;
+            
+    case 4: // scan all proportional outputs (null) ...
             // 
             // @ check...
             aveCurrent = GetAveCurrent(SAMPLES,Current); // # samples
+            MVPComms.Solenoid[channel] = 0;
             
+            statecnt++;            
             if(statecnt==SAMPLES){
-              statecnt=0;
-              channel++;
+              statecnt=0;          
               GetAveCurrent(0,0); // reset
               
               // -->> test results
@@ -552,7 +740,9 @@ byte RunTest(byte Speed,int Current)
                 MVPResults.PropNull[channel] = false;
                 MVPResults.Fail = true;
               }
+              channel++;
             }
+            MVPResults.PropNullVal[channel] = aveCurrent;
             
             // -->> done
             if(channel==15) {
@@ -563,30 +753,32 @@ byte RunTest(byte Speed,int Current)
               GetAveSensor(0,0);
             }
             break;
-            
-    case 4: // scan all sensor inputs for (positive)...
+                      
+    case 5: // scan all sensor inputs for (positive)...
             // 
             // @ check...
+            statecnt++;
             aveSensor = GetAveSensor(SAMPLES,channel); // # samples
             MVPComms.SensorSupply[channel/2]=1; //turn on PSU 1 per 2 sensors...
-            
+
             if(statecnt==SAMPLES){
-              statecnt=0;
-              channel++;
+              statecnt=0;           
               GetAveSensor(0,0); // reset
-              
+                         
               // -->> test results
-              if( (aveSensor < mA_HI) && (aveCurrent > mA_LO)) {
+              if( (aveSensor < mA_HI) && (aveSensor > mA_LO)) {
                  MVPResults.SensorDrive[channel] = IS_MA;
               }
-              else if ((aveSensor < V_HI) && (aveCurrent > V_LO)){
+              else if ((aveSensor < V_HI) && (aveSensor > V_LO)){
                 // ok, current is good
-                MVPResults.SensorDrive[channel] = IS_V;
-              } else {
+                  MVPResults.SensorDrive[channel] = IS_V;
+              }else {
                 // fail
                 MVPResults.SensorDrive[channel] = 0;
                 MVPResults.Fail = true;
               }
+              MVPResults.SensorVal[channel] = aveSensor;
+              channel++;
             }
             
             // -->> done
@@ -599,14 +791,15 @@ byte RunTest(byte Speed,int Current)
             }
             break;
             
-    case 5: // scan all sensor inputs (null) values...
+    case 6: // scan all sensor inputs (null) values...
             // 
             // @ check...
             aveSensor = GetAveSensor(SAMPLES,channel); // # sample
+            statecnt++;
             
             if(statecnt==SAMPLES){
               statecnt=0;
-              channel++;
+              
               GetAveSensor(0,0); // reset
               
               // -->> test results
@@ -618,28 +811,30 @@ byte RunTest(byte Speed,int Current)
                 MVPResults.SensorNull[channel] = false;
                 MVPResults.Fail = true;
               }
+              MVPResults.SensorNullVal[channel] = aveSensor;
+              channel++;
             }
             
             // -->> done
             if(channel==10) {
               MVPResults.TestNum++;
+              state++;
               channel = 0;
               statecnt = 0;
               GetAveSensor(0,0); // reset
             }
             break;
 
-    case 6: // scan moisture values...
+    case 7: // scan moisture values...
             // 
             // @ check...
             aveSensor = GetAveSensor(SAMPLES,10); // # sample
             MVPComms.MoistPwr = 1;
+            statecnt++;
                
             if(statecnt==SAMPLES){
-              statecnt=0;
-              channel++;
+              statecnt=0;           
               GetAveSensor(0,0); // reset
-              
               // -->> test results
               if((aveSensor > MOIST_MIN) && (aveSensor < MOIST_MAX)) {
                 // ok, 
@@ -649,10 +844,13 @@ byte RunTest(byte Speed,int Current)
                 MVPResults.Moist = false;
                 MVPResults.Fail = true;
               }
+              MVPResults.MoistVal = aveSensor;           // moist ip
+              channel++;
             }
             
             // -->> done
             if(channel==1) {
+              state++;
               MVPResults.TestNum++;
               channel = 0;
               statecnt = 0;
@@ -660,14 +858,14 @@ byte RunTest(byte Speed,int Current)
             }
             break;
 
-    case 7: // scan temp values...
+    case 8: // scan temp values...
             // 
             // @ check...
             aveSensor = GetAveSensor(SAMPLES,11); // # sample
-               
+            statecnt++;
+             
             if(statecnt==SAMPLES){
               statecnt=0;
-              channel++;
               GetAveSensor(0,0); // reset
               
               // -->> test results
@@ -679,10 +877,13 @@ byte RunTest(byte Speed,int Current)
                 MVPResults.Temp = false;
                 MVPResults.Fail = true;
               }
+              MVPResults.TempVal = aveSensor;            // pt100 ip
+              channel++;
             }
             
             // -->> done
             if(channel==1) {
+              state++;
               MVPResults.TestNum++;
               channel = 0;
               statecnt = 0;
@@ -690,16 +891,15 @@ byte RunTest(byte Speed,int Current)
             }
             break;
 
-    case 8: // scan PCBVolts values...
+    case 9: // scan PCBVolts values...
             // 
             // @ check...
             aveSensor = GetAveSensor(SAMPLES,12); // # sample
-               
+            statecnt++;
+            
             if(statecnt==SAMPLES){
               statecnt=0;
-              channel++;
               GetAveSensor(0,0); // reset
-              
               // -->> test results
               if((aveSensor > PCBV_MIN) && (aveSensor < PCBV_MAX)) {
                 // ok, 
@@ -709,10 +909,13 @@ byte RunTest(byte Speed,int Current)
                 MVPResults.PCBVolts = false;
                 MVPResults.Fail = true;
               }
+              MVPResults.PCBVoltsVal = aveSensor;        // PBC onboards...
+              channel++;
             }
             
             // -->> done
             if(channel==1) {
+              state++;
               MVPResults.TestNum++;         
               channel = 0;
               statecnt = 0;
@@ -721,25 +924,26 @@ byte RunTest(byte Speed,int Current)
             }
             break;
             
-    case 9: // scan PCB Temp values...
+    case 10: // scan PCB Temp values...
             // 
             // @ check...
             aveSensor = GetAveSensor(SAMPLES,13); // # sample
-               
+            statecnt++;
+        
             if(statecnt==SAMPLES){
               statecnt=0;
-              channel++;
               GetAveSensor(0,0); // reset
-              
               // -->> test results
               if((aveSensor > PCBT_MIN) && (aveSensor < PCBT_MAX)) {
                 // ok, 
-                MVPResults.PCBVolts = true;
+                MVPResults.PCBTemp = true;
               } else {
                 // fail
-                MVPResults.PCBVolts = false;
+                MVPResults.PCBTemp = false;
                 MVPResults.Fail = true;
               }
+              MVPResults.PCBTempVal = aveSensor;
+              channel++;
             }
             
             // -->> done
@@ -759,15 +963,9 @@ byte RunTest(byte Speed,int Current)
   // Comms check, error rate should be low
   if(result==1)
     MVPResults.CommsOk++;
-  else
+  else if (state > 1)
     MVPResults.CommsError++;
 
-  if(MVPResults.CommsError > SAMPLES){
-    state = 0;
-    retval = DONE;
-    MVPResults.Fail = true;
-  }
-  
   return retval;
 }
 
@@ -785,48 +983,60 @@ int GetAveCurrent(byte samples,int Current)
     ave = (float)(samples-1) / (float)samples * ave  + (float)Current/(float)samples ;
   }
   else
-    ave = 0; //reset
+    ave = Current; //reset
+    
+  return (int)ave; //mA
 }
 
 // calc average sensor value, also has a reset function
 //  samples - 0 to reset else it's the smoothing period.
-//  channel - to smooth 0-9 (ana) 10 (moist)
+//  channel - to smooth 0-9 (ana) 10 (moist) 11 (temp)
 //
 int GetAveSensor(byte samples,byte channel)
 {
-  static float ave[11];
+  static float ave[14];
   byte i;
   
-  if((channel < 0) || (channel > 10))
+  if((channel < 0) || (channel > 13)){
+    Serial.println("GetAveSensor: Range ERROR");
     return -1;
+  }
 
   samples *= .3; // exponent compensation
      
   if(channel == 10) {
     ave[channel] = (float)(samples-1) / (float)samples * ave[channel]  + (float)MVPComms.MoistVal/(float)samples ;
+  }else if(channel == 11) {
+    ave[channel] = (float)(samples-1) / (float)samples * ave[channel]  + (float)MVPComms.TempVal/(float)samples ;
+  }
+  else if(channel == 12) {
+    ave[channel] = (float)(samples-1) / (float)samples * ave[channel]  + (float)MVPComms.PCBTemp/(float)samples ;
+  }
+  else if(channel == 13) {
+    ave[channel] = (float)(samples-1) / (float)samples * ave[channel]  + (float)MVPComms.PCBVolts/(float)samples ;
   }
   else if(samples > 0) {
      ave[channel] = (float)(samples-1) / (float)samples * ave[channel]  + (float)MVPComms.SensorVal[channel]/(float)samples ;
   }
   else{
-    for(i=0;i<10;i++)
+    for(i=0;i<=11;i++)
       ave[i] = 0; //reset
   }
+  
+  return (int)ave[channel];
 }
 
 
 // Status LED, it's bicolour and has 3 states 
 //
 void UpdateLED(byte Result)
-{
-  if(Result == DONE) {
-    if(MVPResults.Fail){
-      digitalWrite(LEDAR,HIGH); // red
-      digitalWrite(LEDAG,LOW);
-    }else{
-      digitalWrite(LEDAR,LOW); // gn
-      digitalWrite(LEDAG,HIGH);
-    }
+{ 
+  if(MVPResults.Fail){
+    digitalWrite(LEDAR,HIGH); // red
+    digitalWrite(LEDAG,LOW);
+  }else if ((MVPResults.Fail == false) && (MVPResults.TestComplete == true)){
+    digitalWrite(LEDAR,LOW); // gn
+    digitalWrite(LEDAG,HIGH);
   } else {
     digitalWrite(LEDAR,LOW); // clear
     digitalWrite(LEDAG,LOW);
@@ -945,7 +1155,7 @@ int UpdateMVP(struct TMVPComms *MVPComms)
   if(MVPComms->Solenoid[14] > 0) Buffer[i] += 16;
   if(MVPComms->Solenoid[14] < 0) Buffer[i] += 32;
   if(MVPComms->SensorSupply[0] > 0) Buffer[i] += 64; // PSU 1 & 2
-  if(MVPComms->SensorSupply[1] < 0) Buffer[i] += 128; // PSU 3 & 4
+  if(MVPComms->SensorSupply[1] > 0) Buffer[i] += 128; // PSU 3 & 4
   i++;
   
   // 17-24
@@ -964,7 +1174,7 @@ int UpdateMVP(struct TMVPComms *MVPComms)
   // PSU 5-10
   Buffer[i] = 0;
   if(MVPComms->SensorSupply[2] > 0) Buffer[i] += 1;
-  if(MVPComms->SensorSupply[3] < 0) Buffer[i] += 2;
+  if(MVPComms->SensorSupply[3] > 0) Buffer[i] += 2;
   if(MVPComms->SensorSupply[4] > 0) Buffer[i] += 4;
   if(MVPComms->MoistPwr) Buffer[i] += 8;  // Moist PSU
   i++;
@@ -981,7 +1191,7 @@ int UpdateMVP(struct TMVPComms *MVPComms)
     Serial.print(Buffer[i],HEX);
     Serial.print(",");
   }*/
-  Serial.println("!");
+//Serial.println("!");
   SoftSerial.write(Buffer, i); //waits till txd
   digitalWrite(TXMODE, LOW);
   
@@ -990,7 +1200,7 @@ int UpdateMVP(struct TMVPComms *MVPComms)
   //  =========================================================================
   //Serial.println("");Serial.print("A");
   memset(Buffer,0,sizeof(Buffer));
-  SoftSerial.readBytes(Buffer, 23);
+  SoftSerial.readBytes((char *)Buffer, 23);
    
   result = CheckCRC(Buffer,21); 
      
@@ -1026,7 +1236,7 @@ int UpdateMVP(struct TMVPComms *MVPComms)
   //  =========================================================================
   memset(Buffer,0,sizeof(Buffer));
   //Serial.println("B");
-  SoftSerial.readBytes(Buffer, 19);
+  SoftSerial.readBytes((char *)Buffer, 19);
    
   result = CheckCRC(Buffer,17); 
    
@@ -1096,7 +1306,7 @@ char CheckCRC(byte *Data,byte Len)
   
    if((uchCRCHi != Data[Len]) || (uchCRCLo != Data[Len+1]))
    {
-      Serial.println("CRC fail" );
+      //Serial.println("CRC fail" );
       return -1;
    }
    else
@@ -1115,5 +1325,4 @@ int ring(int i,int len)
   if(i<0)
     return i+len;
 }
-
 
