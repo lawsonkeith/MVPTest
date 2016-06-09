@@ -232,7 +232,6 @@ void setup()
 //
 void loop() // run over and over
 {
-  static bool OldComplete;
   static int Current,aveCurrent;
   static byte state,result=BUSY;
   byte mode,sampletime; 
@@ -265,6 +264,7 @@ void loop() // run over and over
             result = RunTest(FAST,aveCurrent); // note this will take 38ms to execute due to bus timings and the fact it's a blocking transaction
             if(result != BUSY) {
                state = 0;
+               Update=millis()+5; // kick terminal     
             }         
             break;
             
@@ -273,6 +273,7 @@ void loop() // run over and over
            result = RunTest(SLOW,aveCurrent);
             if(result != BUSY) {
                state = 0;
+               Update=millis()+5; // kick terminal     
             }
             break;
   }
@@ -291,11 +292,6 @@ void loop() // run over and over
   }
   UpdateLED(result);
   
-  // immediate refresh
-  if((OldComplete == false) && (MVPResults.TestComplete == true)){
-    UpdateTerminal(); // kick when it's finished
-  }
-  OldComplete = MVPResults.TestComplete;
 }// END loop
 
 
@@ -746,7 +742,7 @@ byte RunTest(byte Speed,int Current)
             aveCurrent = GetAveCurrent(SAMPLES,Current); // # samples
             
             statecnt++;            
-            if(statecnt==50){
+            if(statecnt==SAMPLES){
               statecnt=0;          
               GetAveCurrent(0,0); // reset
               
@@ -817,7 +813,7 @@ byte RunTest(byte Speed,int Current)
             aveSensor = GetAveSensor(SAMPLES,channel); // # sample
             statecnt++;
             
-            if(statecnt==50){
+            if(statecnt==SAMPLES){
               statecnt=0;
               
               GetAveSensor(0,0); // reset
