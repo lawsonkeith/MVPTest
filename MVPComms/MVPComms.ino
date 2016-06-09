@@ -232,6 +232,7 @@ void setup()
 //
 void loop() // run over and over
 {
+  static bool OldComplete;
   static int Current,aveCurrent;
   static byte state,result=BUSY;
   byte mode,sampletime; 
@@ -280,7 +281,7 @@ void loop() // run over and over
   // Periodic terminal update.
   // 
   if(millis() > Update) {
-    if(MVPResults.TestComplete == true){
+    if(MVPResults.TestComplete == true){    
       Update = millis() + 15000; 
     }
     else{
@@ -289,7 +290,12 @@ void loop() // run over and over
     UpdateTerminal(); // 5s
   }
   UpdateLED(result);
-
+  
+  // immediate refresh
+  if((OldComplete == false) && (MVPResults.TestComplete == true)){
+    UpdateTerminal(); // kick when it's finished
+  }
+  OldComplete = MVPResults.TestComplete;
 }// END loop
 
 
@@ -352,7 +358,7 @@ void UpdateTerminal(void)
   Serial.write(27);
   Serial.print("[H");     // cursor to home command
 
-  Serial.println(F("=================== SMD MFVP Board tester (Hi/Lo Res) V1.0 ===================="));
+  Serial.println(F("=================== SMD MFVP Board tester (Hi/Lo Res) V1.1 ===================="));
   Serial.println("");
   tests = MVPResults.TestNum;
   if(MVPResults.RunningTest == false) {
@@ -366,8 +372,8 @@ void UpdateTerminal(void)
     if(MVPResults.AddressFound){
       Serial.print(F("TEST1>>> Found board address at address #"));
       Serial.print(ADDRESS);
-      Serial.print(" / ");
-      Serial.print(ADDRESS,BIN);
+      //Serial.print(" / ");
+      //Serial.print(ADDRESS,BIN);
       if(MVPResults.IsNewBoard){
         Serial.println(" - high(er) res board.");  
       }else{
@@ -615,7 +621,7 @@ byte RunTest(byte Speed,int Current)
             ADDRESS=1;
             Attempt=0;
             if(Speed == FAST){
-              SAMPLES = 50;
+              SAMPLES = 60;
             }
             else{  
               SAMPLES = 150;
@@ -740,7 +746,7 @@ byte RunTest(byte Speed,int Current)
             aveCurrent = GetAveCurrent(SAMPLES,Current); // # samples
             
             statecnt++;            
-            if(statecnt==20){
+            if(statecnt==50){
               statecnt=0;          
               GetAveCurrent(0,0); // reset
               
@@ -811,7 +817,7 @@ byte RunTest(byte Speed,int Current)
             aveSensor = GetAveSensor(SAMPLES,channel); // # sample
             statecnt++;
             
-            if(statecnt==20){
+            if(statecnt==50){
               statecnt=0;
               
               GetAveSensor(0,0); // reset
@@ -1343,5 +1349,4 @@ int ring(int i,int len)
   if(i<0)
     return i+len;
 }
-
 
