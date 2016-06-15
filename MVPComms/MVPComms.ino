@@ -13,6 +13,7 @@
   * Comms to the board is over 485 using (soft ser)
   * A terminal displays test status info (default ser)
   
+  Note - add 10uF an RST-GND to disable auto reset.
  */
 #include <SoftwareSerial.h>
 
@@ -42,7 +43,7 @@ SoftwareSerial SoftSerial(11, 10); // RX, TX
   const int MOIST_MAX = 712;
   const int TEMP_MIN = 498; //518
   const int TEMP_MAX = 538;
-  const int PCBV_MIN = 514; //534
+  const int PCBV_MIN = 500; //534
   const int PCBV_MAX = 554; 
   const int PCBT_MIN = 567; //587
   const int PCBT_MAX = 627; 
@@ -104,6 +105,7 @@ struct TMVPResults {
   
   long   CommsOk;         // stats         
   long   CommsError;
+  bool BoardDetectFail;
 } MVPResults;
                           
 //GPIO addresses
@@ -232,6 +234,7 @@ void setup()
 //
 void loop() // run over and over
 {
+ 
   static int Current,aveCurrent;
   static byte state,result=BUSY;
   byte mode,sampletime; 
@@ -292,6 +295,7 @@ void loop() // run over and over
   }
   UpdateLED(result);
   
+
 }// END loop
 
 
@@ -325,6 +329,7 @@ void ResetResults()
   MVPResults.PCBVolts = false;   
   MVPResults.PCBTemp = false;   
   MVPResults.Fail = false;
+  MVPResults.BoardDetectFail = false;
   
   for(i=0;i<=14;i++) {
     MVPResults.PropDriveA[i] = false;
@@ -354,7 +359,7 @@ void UpdateTerminal(void)
   Serial.write(27);
   Serial.print("[H");     // cursor to home command
 
-  Serial.println(F("=================== SMD MFVP Board tester (Hi/Lo Res) V1.1 ===================="));
+  Serial.println(F("=================== SMD MFVP Board tester (Hi/Lo Res) V1.2 ===================="));
   Serial.println("");
   tests = MVPResults.TestNum;
   if(MVPResults.RunningTest == false) {
@@ -370,7 +375,9 @@ void UpdateTerminal(void)
       Serial.print(ADDRESS);
       //Serial.print(" / ");
       //Serial.print(ADDRESS,BIN);
-      if(MVPResults.IsNewBoard){
+      if( MVPResults.BoardDetectFail) {
+        Serial.println(" - couldn't detect board type, an output is probably stuck high assuming hi res, this will invalidate tsts 2-4.");
+      }else if(MVPResults.IsNewBoard){
         Serial.println(" - high(er) res board.");  
       }else{
         Serial.println(" - low res board.");   
@@ -395,9 +402,9 @@ void UpdateTerminal(void)
       }
       Serial.print(MVPResults.PropDriveValA[i]);
       if(MVPResults.PropDriveA[i])
-        Serial.print(" ok, ");
+        Serial.print(" ,");
       else
-        Serial.print(" fail, ");
+        Serial.print(" bad,");
     }
     if((--tests) == 0) return;
  
@@ -417,9 +424,9 @@ void UpdateTerminal(void)
       }
       Serial.print(MVPResults.PropDriveValB[i]);
       if(MVPResults.PropDriveB[i])
-        Serial.print(" ok, ");
+        Serial.print(" ,");
       else
-        Serial.print(" fail, ");
+        Serial.print(" bad,");
     }
     if((--tests) == 0) return;
     
@@ -437,9 +444,9 @@ void UpdateTerminal(void)
       }
       Serial.print(MVPResults.PropNullVal[i]);
       if(MVPResults.PropNull[i]){
-        Serial.print(" ok, ");
+        Serial.print(" ,");
       } else {
-        Serial.print(" fail, ");
+        Serial.print(" bad,");
       }
     }
     //Serial.println();
@@ -456,12 +463,12 @@ void UpdateTerminal(void)
       }
       Serial.print(MVPResults.SensorVal[i]);
       if(MVPResults.SensorDrive[i]==IS_MA) {
-        Serial.print(" mA ok, ");
+        Serial.print(" mA ,");
       }
       else if(MVPResults.SensorDrive[i]==IS_V) {
-        Serial.print(" V ok, ");
+        Serial.print(" V ,");
       } else {
-        Serial.print(" fail, ");  
+        Serial.print(" bad,");  
       }
     }
 
@@ -489,9 +496,9 @@ void UpdateTerminal(void)
       Serial.print(MVPResults.SensorNullVal[i]);
       
       if(MVPResults.SensorNull[i])
-        Serial.print(" ok,");
+        Serial.print(" ,");
       else
-        Serial.print(" fail,");
+        Serial.print(" bad,");
     }
     if((--tests) == 0) return;
     if(((MVPResults.SensorNull[0] == 0) && (MVPResults.SensorNull[1] == 0)) || 
@@ -527,9 +534,9 @@ void UpdateTerminal(void)
     Serial.print(F("TEST7>>> Check moisture turns on and off and sensor works: "));
     Serial.print(  MVPResults.MoistVal );           // moist ip
       if(MVPResults.Moist) {
-        Serial.print(" ok ");
+        Serial.print("  ");
       } else {
-        Serial.print(" fail ");
+        Serial.print(" bad");
       }
     Serial.println("");
     if((--tests) == 0) return; 
@@ -538,9 +545,9 @@ void UpdateTerminal(void)
     Serial.print(F("TEST8>>> Check PT100 temperature input works: "));
     Serial.print(  MVPResults.TempVal );            // pt100 ip
       if(MVPResults.Temp)
-        Serial.print(" ok ");
+        Serial.print("  ");
       else
-        Serial.print(" fail ");
+        Serial.print(" bad");
     Serial.println("");
     if((--tests) == 0) return;
 
@@ -548,9 +555,9 @@ void UpdateTerminal(void)
     Serial.print(F("TEST9>>> Check onboard PCBVolts sensor works: "));
     Serial.print(  MVPResults.PCBVoltsVal );        // PBC onboards...
       if(MVPResults.PCBVolts)
-        Serial.print(" ok ");
+        Serial.print("  ");
       else
-        Serial.print(" fail ");  
+        Serial.print(" bad");  
     if((--tests) == 0) return;
     
     // #10
@@ -558,9 +565,9 @@ void UpdateTerminal(void)
     Serial.print(F("TEST10>>> Check onboard PCBTemp sensor works: "));
     Serial.print(  MVPResults.PCBTempVal );
       if(MVPResults.PCBTemp)
-        Serial.print(" ok ");
+        Serial.print("  ");
       else
-        Serial.print(" fail ");  
+        Serial.print(" bad");  
     if((--tests) == 0) return;
 
     if(MVPResults.TestComplete){
@@ -656,15 +663,22 @@ byte RunTest(byte Speed,int Current)
               statecnt = 0;
               GetAveCurrent(0,0);
               // new board / old board detection?
-              if(aveCurrent < 220) {// new board 170-190
+              if((aveCurrent > 150) && (aveCurrent < 220)) {// new board 170-190
                 SOL_OFF_LOAD = 210; // for no load test criterea
                 SOL_DRIVE = 230;
                 MVPResults.IsNewBoard = true;    
-              } else { // range is 231-271mA for old board
+              } else if((aveCurrent > 210) && (aveCurrent < 300)) { // range is 231-271mA for old board
                 SOL_OFF_LOAD = 290;
                 SOL_DRIVE = 94;
                 MVPResults.IsNewBoard = false;  
               }      
+              else
+              { // range is 231-271mA for old board
+                SOL_OFF_LOAD = 210;
+                SOL_DRIVE = 230;
+                MVPResults.IsNewBoard = true;
+                MVPResults.BoardDetectFail = true;  
+              }  
             }
             break;
             
@@ -1066,6 +1080,7 @@ byte GetInput(void)
   byte x = 0;
   
   if(digitalRead(BUTTON_IN) == LOW) {
+    digitalWrite(LEDAG,HIGH);
     for(x=0;x<20;x++) {
       if(digitalRead(BUTTON_IN))
         break;
@@ -1345,4 +1360,5 @@ int ring(int i,int len)
   if(i<0)
     return i+len;
 }
+
 
