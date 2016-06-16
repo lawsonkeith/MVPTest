@@ -1,6 +1,8 @@
 ## Readme - 
 
-# Rev 2 prototype
+Use #ifdef prototype to define target configuration.
+
+### Rev 2 prototype
 
 Andrew Wrigley
 
@@ -20,9 +22,12 @@ Tom Mattinson
 
 * Would want one for each board type
 
+### Rev 1 prototype
 
+* Analog sampling seems unreliable
+* No voltage compensation
 
-# Rev 0 prototype
+### Rev 0 prototype
 
 Wire up as arduino follows:
 
