@@ -1,4 +1,28 @@
-## Readme
+## Readme - 
+
+# Rev 2 prototype
+
+Andrew Wrigley
+
+* Still have issues with both cards high failure rates
+* Very interested as testing is difficult for that board
+* Not effects of variable power supply
+* Doesn't know history of boards lying around
+* Mentions boards failed out of the box
+
+Matt Knight
+
+* Interested since this is still a cost to him
+* Getting spares difficult
+* Competetors offering easier to test solutions
+ 
+Tom Mattinson
+
+* Would want one for each board type
+
+
+
+# Rev 0 prototype
 
 Wire up as arduino follows:
 
