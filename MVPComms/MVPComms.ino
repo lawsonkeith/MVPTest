@@ -27,26 +27,26 @@ SoftwareSerial SoftSerial(11, 10); // RX, TX
 
 // define test constants
   // Current FB - HI RES
-  const int SOL_HI = 2120; // mA
-  //2042
-  const int SOL_LO = 1930; // mA
-  int SOL_OFF_LOAD = 210;  //nominally it's 180mA just to power the board
-  int SOL_DRIVE = 230; // 0-255 demand
+  int SOL_HI = 0; // mA now calced dynamically!
+  int SOL_LO = 0; // mA
+  //
+  int SOL_OFF_LOAD = 0;  // now set dynamically
+  int SOL_DRIVE = 0; // 0-255 demand
   
   // Sensors
-  const int mA_HI = 446; // 426 raw val
-  const int mA_LO = 406;
-  const int V_HI = 988; // 968
-  const int V_LO = 948;
+  int mA_HI = 0;
+  int mA_LO = 0;
+  int V_HI = 0; 
+  int V_LO = 0;
   const int SEN_OFF = 10;
   const int MOIST_MIN = 672; //692
   const int MOIST_MAX = 712;
   const int TEMP_MIN = 498; //518
   const int TEMP_MAX = 538;
-  const int PCBV_MIN = 500; //534
-  const int PCBV_MAX = 554; 
-  const int PCBT_MIN = 567; //587
-  const int PCBT_MAX = 627; 
+  int PCBV_MIN = 0; 
+  int PCBV_MAX = 0; 
+  int PCBT_MIN = 0; 
+  int PCBT_MAX = 0; 
   
   
 struct TMVPComms {
@@ -85,7 +85,7 @@ struct TMVPResults {
   bool   Temp;            // pt100 ip
   bool   PCBVolts;        // PBC onboards...
   bool   PCBTemp;
-
+  
   int   MoistVal;           // moist ip
   int   TempVal;            // pt100 ip
   int   PCBVoltsVal;        // PBC onboards...
@@ -106,6 +106,8 @@ struct TMVPResults {
   long   CommsOk;         // stats         
   long   CommsError;
   bool BoardDetectFail;
+  
+  float SupplyVoltage;
 } MVPResults;
                           
 //GPIO addresses
@@ -118,7 +120,7 @@ int LEDAR = 7;
 int BUTTON_IN = 8;
 int BUTTON_OUT = 9;
 
-int CURRENT_IN = 7;
+int CURRENT_IN = 5; //5 cap 10Hz filter, 7 norm
 
 // address#
 int ADDRESS = 0;
@@ -218,7 +220,7 @@ void setup()
   pinMode(BUTTON_IN,INPUT_PULLUP);
   digitalWrite(BUTTON_OUT,LOW);
  
-  Serial.begin(19200);
+  Serial.begin(115200);
    while (!Serial) {
     ; // wait for serial port to connect. Needed for Leonardo only
   }
@@ -227,6 +229,53 @@ void setup()
   SoftSerial.begin(19200);
   SoftSerial.setTimeout(100); //make addr scan faster
  
+}
+
+
+// Based on the measured limits recalculate what we think the solenoid hi/lo values should be
+// this is for when we are running off a bench power supply and the voltage isn't exactly 24.
+// on a vehicle it may be < 18V!!  This will all appear like black magic!!!
+//
+void RecalcSolenoidLimits(bool IsNewBoard)
+{
+  float voltage,multiplier;
+  
+  // work out voltage...
+  voltage = 0.0417 * analogRead(6) - 0.7786; 
+  MVPResults.SupplyVoltage = voltage;
+  
+  if(IsNewBoard)
+  {
+     // new board specific compensation here   
+  }
+  else
+  {
+   
+    // I compensation
+    multiplier = 17.753 * voltage - 0.0674;
+    mA_HI = multiplier + 25; // 426 raw val @ 24
+    mA_LO = multiplier - 25;
+    
+    // voltage compensation
+    V_HI = 968 + 25; // 968 @ 24
+    V_LO = 968 - 25;
+    
+    // and a compensation factor...
+    multiplier = 40.674 * voltage + 215.82;
+
+    // power supply compensation could be 15-24V!!
+    SOL_HI = multiplier + 25; // 1200 @ 24
+    SOL_LO = multiplier - 65; 
+    
+    // onboard sensors
+    PCBV_MIN = 490.0; //@ 24
+    PCBV_MAX = 554.0; //@24
+    
+    multiplier = 24.27 * voltage + 1.5183;
+
+    PCBT_MIN = multiplier - 30 ; // 584 @ 24
+    PCBT_MAX = multiplier + 30; 
+  }
 }
 
 
@@ -239,17 +288,17 @@ void loop() // run over and over
   static byte state,result=BUSY;
   byte mode,sampletime; 
   static unsigned long Update = 0;
-  
-  
+    
   // @@@@@ Clock routine at 20Hz 1 / (7ms + 38ms) @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
   // all functs must return immediately!
   sampletime=100; //x .1ms conversion time - 7ms
   while(sampletime){
-    Current = (analogRead(CURRENT_IN) -512) * 36; //mA
+    Current = (analogRead(CURRENT_IN) * 25.6 - 13048 );// * 32.32; //mA
+
     aveCurrent = GetAveCurrent(1000,Current); // # samples
     sampletime--;
   };
-   
+
   // @@@@ SM FOR AUTO TEST @@@@@@@@  
   switch(state){
     // get user input
@@ -359,7 +408,7 @@ void UpdateTerminal(void)
   Serial.write(27);
   Serial.print("[H");     // cursor to home command
 
-  Serial.println(F("=================== SMD MFVP Board tester (Hi/Lo Res) V1.2 ===================="));
+  Serial.println(F("=================== SMD MFVP Board tester (Hi/Lo Res) V1.3 ===================="));
   Serial.println("");
   tests = MVPResults.TestNum;
   if(MVPResults.RunningTest == false) {
@@ -376,7 +425,12 @@ void UpdateTerminal(void)
       //Serial.print(" / ");
       //Serial.print(ADDRESS,BIN);
       if( MVPResults.BoardDetectFail) {
-        Serial.println(" - couldn't detect board type, an output is probably stuck high assuming hi res, this will invalidate tsts 2-4.");
+        //MVPResults.BoardDetectFail = false;
+        if( MVPResults.IsNewBoard == true){
+          Serial.println(" - couldn't detect board type, an output is probably stuck high guessing hi res, this may invalidate tsts 2-4.");
+        } else {
+          Serial.println(" - couldn't detect board type, an output is probably stuck high guessing lo res, this may invalidate tsts 2-4.");
+        }
       }else if(MVPResults.IsNewBoard){
         Serial.println(" - high(er) res board.");  
       }else{
@@ -385,8 +439,15 @@ void UpdateTerminal(void)
     }else{
       Serial.println(F("TEST1>>> Can't communicate to board on any address"));
     }
+    if((MVPResults.SupplyVoltage < 23) || (MVPResults.SupplyVoltage > 25)){
+      Serial.print("  WARNING - Supply voltage is out of range - ");
+      Serial.print(MVPResults.SupplyVoltage);
+      Serial.println("V");
+    }
+      
     if(MVPResults.AddressFound == false) return;
-
+    
+    
     // #2
     Serial.print(F("TEST2>>> Drive prop A channels, check current is between "));
     Serial.print(SOL_HI);
@@ -437,7 +498,7 @@ void UpdateTerminal(void)
     Serial.println("mA");
 
     Serial.print("  ");
-    for(i=0;i<=14;i++){
+    for(i=0;i<=0;i++){
       if(i==8){
         Serial.println();
         Serial.print("  ");
@@ -492,34 +553,16 @@ void UpdateTerminal(void)
     // #6
     Serial.println(F("TEST6>>> Check sensor values are zero when power supplies are turned off. "));
     Serial.print("  ");
-    for(i=0;i<=9;i++){
+   
       Serial.print(MVPResults.SensorNullVal[i]);
       
       if(MVPResults.SensorNull[i])
         Serial.print(" ,");
       else
         Serial.print(" bad,");
-    }
+  
     if((--tests) == 0) return;
-    if(((MVPResults.SensorNull[0] == 0) && (MVPResults.SensorNull[1] == 0)) || 
-       ((MVPResults.SensorNull[2] == 0) && (MVPResults.SensorNull[3] == 0)) ||
-       ((MVPResults.SensorNull[4] == 0) && (MVPResults.SensorNull[5] == 0)) ||
-       ((MVPResults.SensorNull[6] == 0) && (MVPResults.SensorNull[7] == 0)) ||
-       ((MVPResults.SensorNull[8] == 0) && (MVPResults.SensorNull[9] == 0)) )  
-    {
-      Serial.println();
-      Serial.print("  Tip - this looks like a power supply fault");
-    }
-    
-    if((MVPResults.SensorNull[0] != MVPResults.SensorNull[1]) || 
-       (MVPResults.SensorNull[2] != MVPResults.SensorNull[3]) ||
-       (MVPResults.SensorNull[4] != MVPResults.SensorNull[5]) ||
-       (MVPResults.SensorNull[6] != MVPResults.SensorNull[7]) ||
-       (MVPResults.SensorNull[8] != MVPResults.SensorNull[9]))  
-    {
-      Serial.println();
-      Serial.print("  Tip - this looks like a power supply fault");
-    }
+   
   
     for(i=0;i<=9;i+=2){
       if((MVPResults.SensorDrive[i] == 0 && MVPResults.SensorDrive[i+1] == 1) && (MVPResults.SensorDrive[i] == 1 && MVPResults.SensorDrive[i+1] == 0)) {
@@ -611,6 +654,7 @@ byte RunTest(byte Speed,int Current)
 
   ResetMVPOut(&MVPComms); //zero all outputs
 
+
   // ok got comms now.
   switch(state)
   {
@@ -624,7 +668,7 @@ byte RunTest(byte Speed,int Current)
             ADDRESS=1;
             Attempt=0;
             if(Speed == FAST){
-              SAMPLES = 60;
+              SAMPLES = 70;
             }
             else{  
               SAMPLES = 150;
@@ -638,6 +682,8 @@ byte RunTest(byte Speed,int Current)
             if(statecnt==2){ //3 goes, it's slow due to timeout
               statecnt=0;
               ADDRESS++;
+              digitalWrite(LEDAG,HIGH); // flicker LED on addr scan
+              delay(5);
               result=0;
               Serial.print(ADDRESS-1);
               Serial.print(",");
@@ -648,7 +694,7 @@ byte RunTest(byte Speed,int Current)
               ADDRESS = 0;
             }
               
-            if((ADDRESS==17) && (Attempt == 5)){
+            if (Attempt == 7){
                 MVPResults.AddressFound = false; 
                 MVPResults.TestNum++;
                 state = 0;
@@ -662,23 +708,32 @@ byte RunTest(byte Speed,int Current)
               channel = 0;
               statecnt = 0;
               GetAveCurrent(0,0);
+              
               // new board / old board detection?
               if((aveCurrent > 150) && (aveCurrent < 220)) {// new board 170-190
                 SOL_OFF_LOAD = 210; // for no load test criterea
                 SOL_DRIVE = 230;
                 MVPResults.IsNewBoard = true;    
               } else if((aveCurrent > 210) && (aveCurrent < 300)) { // range is 231-271mA for old board
-                SOL_OFF_LOAD = 290;
+                SOL_OFF_LOAD = 300;
                 SOL_DRIVE = 94;
                 MVPResults.IsNewBoard = false;  
               }      
               else
               { // range is 231-271mA for old board
-                SOL_OFF_LOAD = 210;
-                SOL_DRIVE = 230;
-                MVPResults.IsNewBoard = true;
-                MVPResults.BoardDetectFail = true;  
-              }  
+                if(millis() % 2 == 0) {
+                  SOL_OFF_LOAD = 220;
+                  SOL_DRIVE = 230;
+                  MVPResults.IsNewBoard = true;
+                  MVPResults.BoardDetectFail = true;  
+                }else{
+                  SOL_OFF_LOAD = 300;
+                  SOL_DRIVE = 94;
+                  MVPResults.IsNewBoard = false;
+                  MVPResults.BoardDetectFail = true;  
+                }
+              }
+              RecalcSolenoidLimits(MVPResults.IsNewBoard);  
             }
             break;
             
@@ -687,7 +742,7 @@ byte RunTest(byte Speed,int Current)
             // @ check...
             aveCurrent = Current; // # now averaged elsewhere
             MVPComms.Solenoid[channel] = SOL_DRIVE;
-            
+//Serial.println(SOL_DRIVE);            
             statecnt++;
             if(statecnt==SAMPLES){
               statecnt=0;
@@ -775,7 +830,7 @@ byte RunTest(byte Speed,int Current)
             
             
             // -->> done
-            if(channel==17) {
+            if(channel==1) {
               MVPResults.TestNum++;
               state++;
               channel = 0;
@@ -846,7 +901,7 @@ byte RunTest(byte Speed,int Current)
             }
             
             // -->> done
-            if(channel==10) {
+            if(channel==1) {
               MVPResults.TestNum++;
               state++;
               channel = 0;
@@ -996,6 +1051,20 @@ byte RunTest(byte Speed,int Current)
   else if (state > 1)
     MVPResults.CommsError++;
 
+  // skipola!!
+  if(Serial.available() > 0) {
+    if(Serial.read() == 'n') {
+      //skipity skip
+      if((state > 1 ) && (state < 10)){
+         MVPResults.TestNum++;
+         state++;
+         channel = 0;
+         statecnt = 0;
+         GetAveSensor(0,0);
+      }
+    }
+  }
+  
   return retval;
 }
 
@@ -1080,26 +1149,10 @@ byte GetInput(void)
   byte x = 0;
   
   if(digitalRead(BUTTON_IN) == LOW) {
-    digitalWrite(LEDAG,HIGH);
-    for(x=0;x<20;x++) {
-      if(digitalRead(BUTTON_IN))
-        break;
-      
-      delay(80);
-    }
-    
-    if(x>15) {
-      Serial.println("Running normal test");
-      delay(500);
-      return SLOW;  //long
-    } else {
-      Serial.println("Running short test");
-      delay(500);
-      return FAST;  //short
-    } 
+    return FAST;  //short
+  }else{
+    return 0;
   }
-  
-  return 0;
 }
 
 
@@ -1348,17 +1401,6 @@ char CheckCRC(byte *Data,byte Len)
    {
      return 1;
    }
-}
-
-// Wraparound functionm for LED scrolling
-// Say 6 would go 0-5
-int ring(int i,int len)
-{
-  if(i>=len)
-    return i- len;
-    
-  if(i<0)
-    return i+len;
 }
 
 
