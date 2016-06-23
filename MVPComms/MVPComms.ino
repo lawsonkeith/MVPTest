@@ -446,9 +446,12 @@ void UpdateTerminal(void)
   Serial.println("");
   tests = MVPResults.TestNum;
   if(MVPResults.RunningTest == false) {
-    Serial.println(F("keys: (s) start test / (n) skip to next test during test"));
+    Serial.println(F(" (s) start tests"));
+    Serial.println(F(" (n) skip to next test"));
+    Serial.println(F(" (q) quit back to menu"));
     Serial.println("");
-    Serial.println(F("Waiting for user input..."));
+    Serial.println("");
+    Serial.print(F("Waiting for user input..."));
   }
   else if (tests == 0) {
     Serial.println(F("Scanning possible MVP Addresses..."));
@@ -1074,7 +1077,8 @@ byte RunTest(byte Speed,int Current)
 
   // skipola!!
   if(Serial.available() > 0) {
-    if(Serial.read() == 'n') {
+    result = Serial.read();
+    if(result == 'n') {
       //skipity skip
       if((state > 1 ) && (state < 10)){
          MVPResults.TestNum++;
@@ -1083,6 +1087,15 @@ byte RunTest(byte Speed,int Current)
          statecnt = 0;
          GetAveSensor(0,0);
       }
+    }else  if(result == 'q') {
+      //quit quit
+      state=0;
+      channel = 0;
+      statecnt = 0;
+      GetAveSensor(0,0); // reset
+      retval = DONE;
+      MVPResults.TestComplete = true;
+      MVPResults.RunningTest = false;
     }
   }
   

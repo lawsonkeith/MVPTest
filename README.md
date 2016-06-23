@@ -1,8 +1,24 @@
 ## Readme - 
 
-Use #ifdef prototype to define target configuration.
-
 ### Rev 2 prototype
+
+Hardware changes:
+
+* Filters on AI's
+* Voltage sampling of 24V
+* Just one resistor but fed via dodes 
+* PCB LED indication sorted with diodes - lights up in AB pairs now
+* Lower test current draw, better heat dissipation
+* Smaller, ligher, can be used on a vehicle
+* 15-24V power supply range tested
+* Uses DCDC PSU
+
+Software changes:
+
+* Faster terminal update, terminal is interactive now
+* PSU voltage compensaton
+* General refinements anx improvements
+
 
 Andrew Wrigley
 
@@ -26,6 +42,8 @@ Tom Mattinson
 
 * Analog sampling seems unreliable
 * No voltage compensation
+* Can't use on a vehicle due to bulk
+* Only button based interaction
 
 ### Rev 0 prototype
 
