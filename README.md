@@ -1,5 +1,10 @@
 ## Readme - 
 
+### Rev 3 prototype
+
+* http://www.i4innovation.co.uk/ enclosure?
+* Need to validate MOSFET direct digital synthesis to test LD at 24V Sin to check if alu box is a go-er? 
+
 ### Rev 2 prototype
 
 Hardware changes:
@@ -12,6 +17,7 @@ Hardware changes:
 * Smaller, ligher, can be used on a vehicle
 * 15-24V power supply range tested
 * Uses DCDC PSU
+* Hammond extruded alu box
 
 Software changes:
 
