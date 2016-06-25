@@ -574,7 +574,7 @@ void UpdateTerminal(void)
       }
     } 
     for(i=0;i<=9;i+=2){
-      if(MVPResults.SensorDrive[i] != MVPResults.SensorDrive[i+1]){
+      if(  ((MVPResults.SensorDrive[i] == 0) && (MVPResults.SensorDrive[i+1] != 0))  ||  ((MVPResults.SensorDrive[i+1] == 0) && ( MVPResults.SensorDrive[i] != 0))  ){
         Serial.println("");
         Serial.print("  Tip - this looks like a sensor fault");
         break;
