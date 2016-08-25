@@ -19,11 +19,14 @@
 
 
 SoftwareSerial SoftSerial(11, 10); // RX, TX
-#define SLOW 1
-#define FAST 2
 
 #define BUSY 8
 #define DONE 9
+
+ #define ONBOARD_MOIST     10
+ #define ONBOARD_TEMP      11
+ #define ONBOARD_PCB_TEMP  12
+ #define ONBOARD_PCB_VOLTS 13
 
 // define test constants
   // Current FB - HI RES
@@ -33,21 +36,22 @@ SoftwareSerial SoftSerial(11, 10); // RX, TX
   int SOL_OFF_LOAD = 0;  // now set dynamically
   int SOL_DRIVE = 0; // 0-255 demand
   
-  // Sensors
+  // Limits set depending on board type
   int mA_HI = 0;
   int mA_LO = 0;
   int V_HI = 0; 
   int V_LO = 0;
-  const int SEN_OFF = 10;
-  const int MOIST_MIN = 672; //692
-  const int MOIST_MAX = 712;
-  const int TEMP_MIN = 498; //518
-  const int TEMP_MAX = 538;
   int PCBV_MIN = 0; 
   int PCBV_MAX = 0; 
   int PCBT_MIN = 0; 
   int PCBT_MAX = 0; 
-  
+
+  // Limits constant across board type(s)
+  const int SEN_OFF = 10;
+  const int MOIST_MIN = 500; //692
+  const int MOIST_MAX = 755;
+  const int TEMP_MIN = 498; //518
+  const int TEMP_MAX = 538;
   const int NEW_HI = 230; // for no load test criterea (mA)
   const int NEW_LO = 170;
   const int OLD_HI = 310;
@@ -232,7 +236,7 @@ void setup()
 
   // set the data rate for the SoftwareSerial port (MFVP)
   SoftSerial.begin(19200);
-  SoftSerial.setTimeout(100); //make addr scan faster
+  SoftSerial.setTimeout(100); //wait a bit...
  
 }
 
@@ -245,10 +249,13 @@ void RecalcSolenoidLimits(bool IsNewBoard)
 {
   float voltage,multiplier;
   
-  // work out voltage...
-  voltage = 0.0417 * analogRead(6) - 0.7786; 
+  // work out voltage supply to this test board.
+ // this will vary on the vehicle, test to 18..26 input supply V
+  voltage = analogRead(6) + analogRead(6) + analogRead(6) + analogRead(6)  + analogRead(6) +  analogRead(6) + analogRead(6) + analogRead(6) + analogRead(6)  + analogRead(6);
+  voltage /= 10;
+  voltage = 0.035336 * voltage + 0.487632509 + .25;
   MVPResults.SupplyVoltage = voltage;
-                 
+                  
   if(IsNewBoard)
   {
     SOL_DRIVE = 230;
@@ -266,48 +273,50 @@ void RecalcSolenoidLimits(bool IsNewBoard)
     multiplier = 40.674 * voltage + 215.82;
 
     // power supply compensation could be 15-24V!!
-    SOL_HI = multiplier + 25; // 1200 @ 24
+    SOL_HI = multiplier + 35; // 1200 @ 24
     SOL_LO = multiplier - 75; 
     
     // onboard sensors
-    PCBV_MIN = 490.0; //@ 24
-    PCBV_MAX = 554.0; //@24
+    PCBT_MIN = 490.0; //@ 24
+    PCBT_MAX = 554.0; //@24
     
     multiplier = 24.27 * voltage + 1.5183;
 
-    PCBT_MIN = multiplier - 30 ; // 584 @ 24
-    PCBT_MAX = multiplier + 30; 
+    PCBV_MIN = multiplier - 30 ; // 584 @ 24
+    PCBV_MAX = multiplier + 30; 
   }
   else // old board...
   {
     SOL_DRIVE = 94;
     SOL_OFF_LOAD = OLD_HI;
+
+    // this board may or may not have a DCDC for the sensors and if it doesn't
+    // we can expect the solenoid drive outputs to be higher!
     
-    // I compensation
-    multiplier = 17.753 * voltage - 0.0674;
-    mA_HI = multiplier + 25; // 426 raw val @ 24
-    mA_LO = multiplier - 25;
+    // I SENSOR
+    mA_HI = 461 + 25;
+    mA_LO = 319 - 25;
     
-    // voltage compensation
-    multiplier = 42.697 * voltage - 38.719;
-    V_HI = multiplier + 25; // 968 @ 24
-    V_LO = multiplier - 25;
+    // V SENSOR
+    V_LO = 729 - 30; //@ 24
+    V_HI = 970 + 30;
     
     // and a compensation factor...
     multiplier = 40.674 * voltage + 215.82;
 
-    // power supply compensation could be 15-24V!!
-    SOL_HI = multiplier + 25; // 1200 @ 24
-    SOL_LO = multiplier - 70; 
+    // SOL DRIVE
+    SOL_HI = multiplier + 35; // 1200 @ 24
+    SOL_LO = multiplier - 175; 
     
-    // onboard sensors
-    PCBV_MIN = 490.0; //@ 24
-    PCBV_MAX = 554.0; //@24
-    
+    // PCB TEMP
+    PCBT_MIN = 490.0; //@ 24
+    PCBT_MAX = 554.0; //@24
+
+    // PCB VOLTS
     multiplier = 24.27 * voltage + 1.5183;
 
-    PCBT_MIN = multiplier - 30 ; // 584 @ 24
-    PCBT_MAX = multiplier + 30; 
+    PCBV_MIN = multiplier - 30 ; // 584 @ 24
+    PCBV_MAX = multiplier + 30; 
   }
 }
 
@@ -344,22 +353,17 @@ void loop() // run over and over
             ResetMVPOut(&MVPComms); //zero all outputs
             break;
             
-    // execute test fast
-    case FAST: 
-            result = RunTest(FAST,aveCurrent); // note this will take 38ms to execute due to bus timings and the fact it's a blocking transaction
+    // execute 
+    case 1: 
+            result = RunTest(aveCurrent); // note this will take 38ms to execute due to bus timings and the fact it's a blocking transaction
             if(result != BUSY) {
                state = 0;
                Update=millis()+5; // kick terminal     
             }         
             break;
             
-    //execute test slow
-    case SLOW:
-           result = RunTest(SLOW,aveCurrent);
-            if(result != BUSY) {
-               state = 0;
-               Update=millis()+5; // kick terminal     
-            }
+   default:
+            state = 0;
             break;
   }
   // @@@@ SM FOR AUTO TEST @@@@@@@@
@@ -442,7 +446,7 @@ void UpdateTerminal(void)
   Serial.write(27);
   Serial.print("[H");     // cursor to home command
 
-  Serial.println(F("=================== SMD MFVP Board tester (Hi/Lo Res) V1.3 ===================="));
+  Serial.println(F("=================== SMD MFVP Board tester (Hi/Lo Res) V1.4 ===================="));
   Serial.println("");
   tests = MVPResults.TestNum;
   if(MVPResults.RunningTest == false) {
@@ -461,16 +465,15 @@ void UpdateTerminal(void)
     if(MVPResults.AddressFound){
       Serial.print(F("TEST1>>> Found board address at address #"));
       Serial.print(ADDRESS);
-      if( MVPResults.BoardDetectFail) {
-          Serial.println("");
-          Serial.print("  WARNING - couldn't detect board type automatically set");
-      }
- 
+
+      if((--tests) == 0) return;
+   
       if(MVPResults.IsNewBoard){
         Serial.println(" - high(er) res board.");  
       }else{
         Serial.println(" - low res board.");   
       }
+      
     }else{
       Serial.println(F("TEST1>>> Can't communicate to board on any address"));
     }
@@ -595,15 +598,6 @@ void UpdateTerminal(void)
   
     if((--tests) == 0) return;
    
-  
-    /*for(i=0;i<=9;i+=2){
-      if((MVPResults.SensorDrive[i] == 0 && MVPResults.SensorDrive[i+1] == 1) && (MVPResults.SensorDrive[i] == 1 && MVPResults.SensorDrive[i+1] == 0)) {
-        Serial.println();
-        Serial.print("  Tip - this looks like a sensor fault");
-        break;
-      }
-    }*/   
-
     // #7
     Serial.println("");
     Serial.print(F("TEST7>>> Check moisture turns on and off and sensor works: "));
@@ -672,12 +666,12 @@ void UpdateTerminal(void)
 // all test results get put in a structure.  When we reply DONE, we immediately restart so it's up to the calling 
 // funct to stop calling us.
 // 
-byte RunTest(byte Speed,int Current)
+byte RunTest(int aveCurrent)
 {
   // main state machine variable
   static byte Attempt=0, state = 0,channel=0; //state machine vars
   static char retval;      // return val 
-  int aveCurrent,aveSensor;
+  int aveSensor;
   byte result;
   static int SAMPLES,statecnt=0;
 
@@ -699,17 +693,11 @@ byte RunTest(byte Speed,int Current)
             GetAveCurrent(0,0);
             ADDRESS=1;
             Attempt=0;
-            if(Speed == FAST){
-              SAMPLES = 70;
-            }
-            else{  
-              SAMPLES = 150;
-            } 
+            SAMPLES = 70;         
             break;
      
      case 1: // board addr scan
             statecnt++;
-            aveCurrent = Current; // # now averaged elsewhere
             // @ check...
             if(statecnt==2){ //3 goes, it's slow due to timeout
               statecnt=0;
@@ -739,32 +727,37 @@ byte RunTest(byte Speed,int Current)
               state++;
               channel = 0;
               statecnt = 0;
-              GetAveCurrent(0,0);
-              // new board / old board detection?
-// Serial.println(aveCurrent);
-              if((aveCurrent > NEW_LO) && (aveCurrent < NEW_HI)) {// new board 170-190
-                MVPResults.IsNewBoard = true;    
-              } else if((aveCurrent > OLD_LO) && (aveCurrent < OLD_HI)) { // range is 231-271mA for old board
-                MVPResults.IsNewBoard = false;  
-              }      
-              else
-              { // Can't work it out, ask the user
-                if(AskIfNewBoard() == true) {
-                  MVPResults.IsNewBoard = true;    
-                  MVPResults.BoardDetectFail = true;  
-                }else{
-                  MVPResults.IsNewBoard = false;  
-                  MVPResults.BoardDetectFail = true;  
-                }
-              }
+              GetAveCurrent(0,0);           
               RecalcSolenoidLimits(MVPResults.IsNewBoard);  
             }
             break;
+
+    case 2: // Determine board type
+             statecnt++;
+             // old board will not respond to this #
+             MVPComms.Solenoid[1] = 250;
+             MVPComms.Solenoid[5] = 250;
+             MVPComms.Solenoid[7] = 250;
+             MVPComms.Solenoid[9] = 250;
+             MVPComms.Solenoid[13] = 250;
+             // wait a bit
+             if(statecnt == 30)
+             {
+                if(aveCurrent > 700)
+                   MVPResults.IsNewBoard = true;
+                else
+                   MVPResults.IsNewBoard = false;
+
+                state++;
+                MVPResults.TestNum++;
+                GetAveCurrent(0,0);           
+                RecalcSolenoidLimits(MVPResults.IsNewBoard);  
+             }
+             break;        
             
-    case 2: // scan all proportional outputs (positive) ...
+    case 3: // scan all proportional outputs (positive) ...
             // 
             // @ check...
-            aveCurrent = Current; // # now averaged elsewhere
             MVPComms.Solenoid[channel] = SOL_DRIVE;
         
             statecnt++;
@@ -795,10 +788,9 @@ byte RunTest(byte Speed,int Current)
             }
             break;
     
-    case 3: // scan all proportional outputs (negative) ...
+    case 4: // scan all proportional outputs (negative) ...
             // 
             // @ check...
-            aveCurrent = Current; // # now averaged elsewhere
             MVPComms.Solenoid[channel] = -1 * SOL_DRIVE;
             
             statecnt++;
@@ -829,10 +821,10 @@ byte RunTest(byte Speed,int Current)
             }
             break;
             
-    case 4: // scan all proportional outputs (null) ...
+    case 5: // scan all proportional outputs (null) ...
             // 
             // @ check...
-            aveCurrent = GetAveCurrent(SAMPLES,Current); // # samples
+      
             
             statecnt++;            
             if(statecnt==SAMPLES){
@@ -863,7 +855,7 @@ byte RunTest(byte Speed,int Current)
             }
             break;
                       
-    case 5: // scan all sensor inputs for (positive)...
+    case 6: // scan all sensor inputs for (positive)...
             // 
             // @ check...
             statecnt++;
@@ -900,7 +892,7 @@ byte RunTest(byte Speed,int Current)
             }
             break;
             
-    case 6: // scan all sensor inputs (null) values...
+    case 7: // scan all sensor inputs (null) values...
             // 
             // @ check...
             aveSensor = GetAveSensor(SAMPLES,channel); // # sample
@@ -934,13 +926,13 @@ byte RunTest(byte Speed,int Current)
             }
             break;
 
-    case 7: // scan moisture values...
+    case 8: // scan moisture values...
             // 
             // @ check...
-            aveSensor = GetAveSensor(SAMPLES,10); // # sample
+            aveSensor = GetAveSensor(SAMPLES,ONBOARD_MOIST); // # sample
             MVPComms.MoistPwr = 1;
             statecnt++;
-               
+         
             if(statecnt==SAMPLES){
               statecnt=0;           
               GetAveSensor(0,0); // reset
@@ -967,12 +959,12 @@ byte RunTest(byte Speed,int Current)
             }
             break;
 
-    case 8: // scan temp values...
+    case 9: // scan temp values...
             // 
             // @ check...
-            aveSensor = GetAveSensor(SAMPLES,11); // # sample
+            aveSensor = GetAveSensor(SAMPLES,ONBOARD_TEMP); // # sample
             statecnt++;
-             
+              
             if(statecnt==SAMPLES){
               statecnt=0;
               GetAveSensor(0,0); // reset
@@ -1000,12 +992,12 @@ byte RunTest(byte Speed,int Current)
             }
             break;
 
-    case 9: // scan PCBVolts values...
+    case 10: // scan PCBVolts values...
             // 
             // @ check...
-            aveSensor = GetAveSensor(SAMPLES,12); // # sample
+            aveSensor = GetAveSensor(SAMPLES,ONBOARD_PCB_VOLTS); // # sample
             statecnt++;
-            
+                 
             if(statecnt==SAMPLES){
               statecnt=0;
               GetAveSensor(0,0); // reset
@@ -1033,12 +1025,12 @@ byte RunTest(byte Speed,int Current)
             }
             break;
             
-    case 10: // scan PCB Temp values...
+    case 11: // scan PCB Temp values...
             // 
             // @ check...
-            aveSensor = GetAveSensor(SAMPLES,13); // # sample
+            aveSensor = GetAveSensor(SAMPLES,ONBOARD_PCB_TEMP); // # sample
             statecnt++;
-        
+ 
             if(statecnt==SAMPLES){
               statecnt=0;
               GetAveSensor(0,0); // reset
@@ -1102,6 +1094,14 @@ byte RunTest(byte Speed,int Current)
   return retval;
 }
 
+// Work out if we're an old or a new board
+// Hangs micro for approx 2s
+bool CheckIfOldBoard()
+{
+  
+  
+}//END CheckIfOldBoard
+
 
 // board fault - oh what is it?
 // ask the user then just guess
@@ -1153,7 +1153,7 @@ int GetAveCurrent(byte samples,int Current)
   return (int)ave; //mA
 }
 
-// calc average sensor value, also has a reset function
+// calc average sensor value fom PCB comms structure (not ain), also has a reset function
 //  samples - 0 to reset else it's the smoothing period.
 //  channel - to smooth 0-9 (ana) 10 (moist) 11 (temp)
 //
@@ -1168,23 +1168,24 @@ int GetAveSensor(byte samples,byte channel)
   }
 
   samples *= .3; // exponent compensation
-     
-  if(channel == 10) {
+
+  
+  if(channel == ONBOARD_MOIST) {
     ave[channel] = (float)(samples-1) / (float)samples * ave[channel]  + (float)MVPComms.MoistVal/(float)samples ;
-  }else if(channel == 11) {
+  }else if(channel == ONBOARD_TEMP) {
     ave[channel] = (float)(samples-1) / (float)samples * ave[channel]  + (float)MVPComms.TempVal/(float)samples ;
   }
-  else if(channel == 12) {
+  else if(channel == ONBOARD_PCB_TEMP) {
     ave[channel] = (float)(samples-1) / (float)samples * ave[channel]  + (float)MVPComms.PCBTemp/(float)samples ;
   }
-  else if(channel == 13) {
+  else if(channel == ONBOARD_PCB_VOLTS) {
     ave[channel] = (float)(samples-1) / (float)samples * ave[channel]  + (float)MVPComms.PCBVolts/(float)samples ;
   }
   else if(samples > 0) {
      ave[channel] = (float)(samples-1) / (float)samples * ave[channel]  + (float)MVPComms.SensorVal[channel]/(float)samples ;
   }
   else{
-    for(i=0;i<=11;i++)
+    for(i=0;i<=13;i++)
       ave[i] = 0; //reset
   }
   
@@ -1215,12 +1216,14 @@ byte GetInput(void)
   byte x = 0;
   
   if(digitalRead(BUTTON_IN) == LOW) {
-    return FAST;  //short
+    return 1;  //old board
   }else{
      if(Serial.available() > 0) {
-      if(Serial.read() == 's') {
-        return FAST;
+      x = Serial.read();
+      if(x == 's') {
+        return 1;
       }
+     
      }
   }
   return 0;  
@@ -1473,5 +1476,4 @@ char CheckCRC(byte *Data,byte Len)
      return 1;
    }
 }
-
 
